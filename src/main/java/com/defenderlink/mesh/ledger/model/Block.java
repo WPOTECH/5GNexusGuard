@@ -8,7 +8,7 @@ import java.util.HexFormat;
 import java.util.List;
 
 /**
- * A block in the DefenderLink Merkle chain.
+ * A block in the 5GNexusGuard Merkle chain.
  *
  * Each block contains:
  * - An ordered list of ledger entries (node registrations, service changes)

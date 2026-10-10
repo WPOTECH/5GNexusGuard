@@ -1,6 +1,6 @@
-# DefenderLink Mesh — Kubernetes / Docker Deployment
+# 5GNexusGuard — Kubernetes / Docker Deployment
 
-Deployment manifests for DefenderLink Mesh on K3s with Multus CNI.
+Deployment manifests for 5GNexusGuard on K3s with Multus CNI.
 
 ## Directory Structure
 

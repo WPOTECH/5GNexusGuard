@@ -1,7 +1,7 @@
 # =============================================================================
-# DefenderLink Mesh — Base DaemonSet
+# 5GNexusGuard — Base DaemonSet
 #
-# Deploys one DefenderLink pod per K3s node.
+# Deploys one 5GNexusGuard pod per K3s node.
 # Uses Multus macvlan for WireGuard — no hostNetwork needed.
 #
 # Customize per-node via overlays/ (see overlays/polaris and overlays/vm).

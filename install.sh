@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# DefenderLink Mesh — Universal Installer
+# 5GNexusGuard — Universal Installer
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/flyingwest/defenderlink-mesh/main/install.sh | sudo bash
@@ -167,7 +167,7 @@ else
 fi
 
 # ── Download & install ────────────────────────────────────────────────────
-step "Downloading DefenderLink Mesh v${VERSION}"
+step "Downloading 5GNexusGuard v${VERSION}"
 
 TMPDIR_INST="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_INST"' EXIT
@@ -209,7 +209,7 @@ case "$PKG_FORMAT" in
     ;;
 esac
 
-ok "DefenderLink Mesh installed"
+ok "5GNexusGuard installed"
 
 # ── Configure endpoint ────────────────────────────────────────────────────
 step "Configuring"
@@ -263,7 +263,7 @@ NODE_IP=$(hostname -I | awk '{print $1}')
 
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║    DefenderLink Mesh installed successfully!     ║${NC}"
+echo -e "${BOLD}${GREEN}║    5GNexusGuard installed successfully!          ║${NC}"
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  Dashboard:  ${BOLD}http://${NODE_IP}:${REQUESTED_PORT}${NC}"

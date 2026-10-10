@@ -1,5 +1,5 @@
 # =============================================================================
-# DefenderLink Mesh — Docker Image
+# 5GNexusGuard — Docker Image
 #
 # Build:
 #   mvn clean package -DskipTests -Dquarkus.package.jar.type=uber-jar
@@ -22,7 +22,7 @@
 # =============================================================================
 FROM eclipse-temurin:24-jre-noble
 
-LABEL org.opencontainers.image.title="DefenderLink Mesh" \
+LABEL org.opencontainers.image.title="5GNexusGuard" \
       org.opencontainers.image.description="Decentralized Zero Trust Overlay Network" \
       org.opencontainers.image.vendor="WPO Tech" \
       org.opencontainers.image.source="https://github.com/flyingwest/defenderlink-mesh" \

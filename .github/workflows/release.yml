@@ -1,5 +1,5 @@
 # =============================================================================
-# DefenderLink Mesh — Build .deb and create GitHub Release
+# 5GNexusGuard — Build .deb and create GitHub Release
 #
 # Triggers on version tags: git tag v1.0.0 && git push origin v1.0.0
 # =============================================================================
@@ -66,9 +66,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "DefenderLink Mesh v${{ steps.version.outputs.version }}"
+          name: "5GNexusGuard v${{ steps.version.outputs.version }}"
           body: |
-            ## DefenderLink Mesh v${{ steps.version.outputs.version }}
+            ## 5GNexusGuard v${{ steps.version.outputs.version }}
 
             ### Install
 

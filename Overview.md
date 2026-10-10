@@ -1,4 +1,4 @@
-# DefenderLink Mesh — Product Overview
+# 5GNexusGuard — Product Overview
 
 **Decentralized Zero Trust Access for Modern Infrastructure**
 
@@ -6,9 +6,9 @@
 
 ---
 
-## What Is DefenderLink Mesh?
+## What Is 5GNexusGuard?
 
-DefenderLink Mesh is an open-source, fully decentralized, No Single Point of Failure Zero Trust Access (ZTA) overlay network. It creates encrypted, per-service tunnels between machines — without any central controller, without cloud dependency, and without a single point of failure.
+5GNexusGuard is an open-source, fully decentralized, No Single Point of Failure Zero Trust Access (ZTA) overlay network. It creates encrypted, per-service tunnels between machines — without any central controller, without cloud dependency, and without a single point of failure.
 
 Every node is sovereign. Every connection is verified. Every service is isolated.
 
@@ -30,19 +30,19 @@ Existing ZTA solutions solve these problems but introduce new ones:
 - **Cloudflare Access** ties you to Cloudflare's infrastructure
 - All of them require trusting a third party with your network topology
 
-DefenderLink Mesh solves the original problem without introducing the new ones.
+5GNexusGuard solves the original problem without introducing the new ones.
 
 ---
 
 ## How It Works
 
-DefenderLink creates a mesh of nodes. Each node is a machine running the DefenderLink service. Nodes discover each other automatically via UDP gossip broadcast. Access control is governed by a blockchain ledger replicated across every node — no central database, no controller, no cloud call required.
+5GNexusGuard creates a mesh of nodes. Each node is a machine running the 5GNexusGuard service. Nodes discover each other automatically via UDP gossip broadcast. Access control is governed by a blockchain ledger replicated across every node — no central database, no controller, no cloud call required.
 
-When a connection is needed between two services on different machines, DefenderLink negotiates a dedicated WireGuard tunnel for that specific service. The tunnel is encrypted with ChaCha20-Poly1305 — the same cryptography used by Signal and WireGuard itself.
+When a connection is needed between two services on different machines, 5GNexusGuard negotiates a dedicated WireGuard tunnel for that specific service. The tunnel is encrypted with ChaCha20-Poly1305 — the same cryptography used by Signal and WireGuard itself.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        DefenderLink Mesh                         │
+│                          5GNexusGuard                           │
 ├────────────────────────┬────────────────────────────────────────┤
 │     Node A (Polaris)   │           Node B (VM / Edge)           │
 │                        │                                        │
@@ -88,7 +88,7 @@ There is no coordination server, no cloud backend, no single point of failure. R
 Your Ed25519 public key is your identity. No certificate authority can revoke it. No third party issues it. No external service validates it. Node-to-node authentication uses cryptographic signatures verified directly against the ledger.
 
 ### Per-Service Tunnel Isolation
-Each service gets its own WireGuard interface and its own keypair. This is a fundamental architectural difference from most VPN-based ZTA products which give you one tunnel for everything. With DefenderLink, an attacker who compromises one service tunnel gains access to exactly one service — nothing else.
+Each service gets its own WireGuard interface and its own keypair. This is a fundamental architectural difference from most VPN-based ZTA products which give you one tunnel for everything. With 5GNexusGuard, an attacker who compromises one service tunnel gains access to exactly one service — nothing else.
 
 ### Blockchain Access Ledger
 Service authorization is not stored in a database that can be modified quietly. It is written to a Merkle-chained ledger with cryptographic signatures. Every access grant and every revocation is permanently recorded and verifiable. You can audit the complete history of who authorized what and when.
@@ -107,13 +107,13 @@ The complete source code is on GitHub. You can read it, audit it, modify it, and
 
 **Scenario:** Your application server needs to reach a PostgreSQL database on a separate machine. Opening port 5432 to the network is a security risk.
 
-**Without DefenderLink:**
+**Without 5GNexusGuard:**
 ```
 App Server ──── TCP :5432 ──────────────► PostgreSQL Server
                 (exposed on network, firewall rules required)
 ```
 
-**With DefenderLink:**
+**With 5GNexusGuard:**
 ```
 App Server
   App ──► 127.0.0.1:14001 (InterceptProxy)
@@ -146,8 +146,8 @@ PostgreSQL never listens on the network. The tunnel only exists between the two 
 
 **Scenario:** Medical devices on a hospital floor need to send data to an internal analytics service. The devices are on a private 5G network (5GMedLink). The analytics service is on a separate server.
 
-**With DefenderLink + 5GMedLink:**
-- Each device runs DefenderLink as a node
+**With 5GNexusGuard + 5GMedLink:**
+- Each device runs 5GNexusGuard as a node
 - The analytics server exposes its API through the mesh
 - Data flows encrypted through WireGuard tunnels
 - Access is controlled by the blockchain ledger — only authorized device IDs can connect
@@ -171,7 +171,7 @@ No VPN client needed on each device. No exposed ports. Full audit trail.
 # Authorized peers: [developer-laptop-node-id]
 
 # On developer laptop at home
-# Install DefenderLink
+# Install 5GNexusGuard
 curl -fsSL https://raw.githubusercontent.com/flyingwest/defenderlink-mesh/main/install.sh | sudo bash
 # Dashboard → Register Node
 # Dashboard → Connect → keycloak
@@ -189,7 +189,7 @@ Keycloak is never exposed to the internet. The developer's laptop is verified by
 ```
 HQ (192.168.1.x)          Branch (192.168.2.x)       Cloud VM
 ┌──────────────┐           ┌──────────────┐           ┌──────────────┐
-│  DefenderLink│◄──gossip──►  DefenderLink│◄──gossip──►  DefenderLink│
+│  5GNexusGuard│◄──gossip──►  5GNexusGuard│◄──gossip──►  5GNexusGuard│
 │  Node: hq    │           │  Node: branch│           │  Node: cloud │
 │              │           │              │           │              │
 │  Keycloak    │           │  App Server  │           │  Analytics   │
@@ -220,7 +220,7 @@ Each site exposes its services to specific authorized peers. All traffic between
 
 ## Comparison with Alternatives
 
-| | DefenderLink | Tailscale | Zscaler | Cloudflare Access |
+| | 5GNexusGuard | Tailscale | Zscaler | Cloudflare Access |
 |---|---|---|---|---|
 | Open source | ✅ Full | ⚠️ Client only | ❌ | ❌ |
 | No controller | ✅ | ❌ | ❌ | ❌ |

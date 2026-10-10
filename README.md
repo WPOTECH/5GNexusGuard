@@ -1,4 +1,4 @@
-# DefenderLink Mesh
+# 5GNexusGuard
 
 **Decentralized Zero Trust Access (ZTA) Overlay Network**
 
@@ -9,11 +9,11 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/wpospace/defenderlink-mesh)](https://hub.docker.com/r/wpospace/defenderlink-mesh)
 [![Docker Image](https://img.shields.io/docker/v/wpospace/defenderlink-mesh?label=docker)](https://hub.docker.com/r/wpospace/defenderlink-mesh)
 
-DefenderLink Mesh is an open-source, fully decentralized Zero Trust Access overlay network. No controller. No single point of failure. No cloud dependency. Every node is sovereign.
+5GNexusGuard is an open-source, fully decentralized Zero Trust Access overlay network. No controller. No single point of failure. No cloud dependency. Every node is sovereign.
 
 https://defenderlinkmesh.com/
 
-![DefenderLink Mesh node console — Raft leader status, mesh node list and ledger chain height](docs/dashboard.png)
+![5GNexusGuard node console — Raft leader status, mesh node list and ledger chain height](docs/dashboard.png)
 
 ---
 
@@ -163,7 +163,7 @@ sudo java -Dmesh.node.public-endpoint=YOUR_IP:51820 \
 
 **Node A (service owner — exposes Keycloak):**
 ```bash
-# Install and start DefenderLink Mesh
+# Install and start 5GNexusGuard
 # Open http://NODE_A_IP:8443
 # Click "Register Node", enter your IP:51820 as endpoint
 # Click "Expose Service":
@@ -175,7 +175,7 @@ sudo java -Dmesh.node.public-endpoint=YOUR_IP:51820 \
 
 **Node B (connector — accesses Keycloak):**
 ```bash
-# Install and start DefenderLink Mesh
+# Install and start 5GNexusGuard
 # Open http://NODE_B_IP:8443
 # Click "Register Node"
 # Click "Connect" on the keycloak service card
@@ -248,8 +248,7 @@ JAVA_OPTS=-Dmesh.node.public-endpoint=192.168.1.100:51820
 
 ## Contributing
 
-DefenderLink Mesh is open source and welcomes contributions.
-
+5GNexusGuard is open source and welcomes contributions.
 ```bash
 # Run in dev mode (no WireGuard required for control plane testing)
 mvn quarkus:dev

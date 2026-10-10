@@ -1,6 +1,6 @@
-# DefenderLink Mesh — Installation Guide
+# 5GNexusGuard — Installation Guide
 
-Three ways to install DefenderLink Mesh. Choose what fits your environment.
+Three ways to install 5GNexusGuard. Choose what fits your environment.
 
 ---
 

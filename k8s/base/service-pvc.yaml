@@ -1,5 +1,5 @@
 # =============================================================================
-# DefenderLink Mesh — Storage
+# 5GNexusGuard — Storage
 # Uses K3s default local-path provisioner
 # =============================================================================
 apiVersion: v1
@@ -17,7 +17,7 @@ spec:
 
 ---
 # =============================================================================
-# DefenderLink Mesh — Service
+# 5GNexusGuard — Service
 # NodePort exposes dashboard and WireGuard UDP externally
 # =============================================================================
 apiVersion: v1

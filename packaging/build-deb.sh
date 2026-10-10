@@ -9,7 +9,7 @@ PKG_DIR="build/${PKG_NAME}_${VERSION}_${ARCH}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "========================================="
-echo " DefenderLink Mesh — Package Builder"
+echo " 5GNexusGuard — Package Builder"
 echo " Version: ${VERSION}"
 echo " Arch:    ${ARCH}"
 echo "========================================="
@@ -75,7 +75,7 @@ ln -sf /opt/defenderlink/bin/defenderlink-mesh "${PKG_DIR}/usr/local/bin/defende
 cp packaging/systemd/defenderlink-mesh.service "${PKG_DIR}/usr/lib/systemd/system/"
 
 cat > "${PKG_DIR}/etc/defenderlink/defenderlink.conf" << 'CONF'
-# DefenderLink Mesh Configuration
+# 5GNexusGuard Configuration
 
 # HTTP port (default: 8443)
 QUARKUS_HTTP_PORT=8443
@@ -99,7 +99,7 @@ Architecture: ${ARCH}
 Depends: openjdk-24-jre-headless | openjdk-21-jre-headless, wireguard-tools
 Recommends: wireguard
 Maintainer: WPO Tech <support@wpotech.com>
-Description: DefenderLink Mesh - Decentralized Zero Trust Overlay Network
+Description: 5GNexusGuard - Decentralized Zero Trust Overlay Network
  Peer-to-peer encrypted tunnels with blockchain ledger consensus.
 Homepage: https://wpotech.com/defenderlink
 CONTROL
@@ -130,7 +130,7 @@ systemctl daemon-reload
 
 echo ""
 echo "============================================"
-echo " DefenderLink Mesh installed successfully!"
+echo " 5GNexusGuard installed successfully!"
 echo " Dashboard: http://localhost:8443"
 echo " Logs:      journalctl -u defenderlink-mesh -f"
 echo "============================================"

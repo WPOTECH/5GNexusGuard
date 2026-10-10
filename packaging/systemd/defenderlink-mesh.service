@@ -1,5 +1,5 @@
 [Unit]
-Description=DefenderLink Mesh - Decentralized Zero Trust Overlay
+Description=5GNexusGuard - Decentralized Zero Trust Overlay
 Documentation=https://github.com/wpospace/defenderlink-mesh
 After=network-online.target
 Wants=network-online.target

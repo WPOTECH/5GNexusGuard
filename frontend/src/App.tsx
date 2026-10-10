@@ -158,10 +158,10 @@ export default function App() {
             background: `linear-gradient(135deg,${T.accent} 0%,${T.accentDim} 100%)`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 13, fontWeight: 700, color: '#000', fontFamily: T.display,
-          }}>DL</div>
+          }}>5G</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: T.textHi, fontFamily: T.display, letterSpacing: 0.5 }}>
-              DefenderLink Mesh
+              5GNexusGuard
             </div>
             <div style={{ fontSize: 9, color: T.textDim, letterSpacing: 2.5, textTransform: 'uppercase' }}>
               Decentralized zero trust overlay
@@ -408,7 +408,7 @@ export default function App() {
             marginTop: 32, padding: '12px 16px', borderTop: `1px solid ${T.border}`,
             display: 'flex', justifyContent: 'space-between', fontSize: 9, color: T.textDim, letterSpacing: 1,
           }}>
-            <span>DEFENDERLINK MESH v1.0.0</span>
+            <span>5GNexusGuard v1.0.0</span>
             <span>NO CONTROLLER &middot; NO SPOF &middot; PEER-TO-PEER ENCRYPTED</span>
           </div>
         </main>

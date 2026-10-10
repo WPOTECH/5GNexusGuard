@@ -1,5 +1,5 @@
 # =============================================================================
-# DefenderLink Mesh — Multus Network Attachment Definition
+# 5GNexusGuard — Multus Network Attachment Definition
 #
 # Creates a macvlan interface on the pod for WireGuard traffic.
 # The pod gets two interfaces:

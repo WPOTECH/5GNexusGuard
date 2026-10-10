@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   DefenderLink Mesh — Type Definitions
+   5GNexusGuard — Type Definitions
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export interface NodeRecord {

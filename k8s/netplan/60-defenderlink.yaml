@@ -1,5 +1,5 @@
 # =============================================================================
-# Netplan configuration for DefenderLink Mesh nodes
+# Netplan configuration for 5GNexusGuard nodes
 # Place at: /etc/netplan/60-defenderlink.yaml
 #
 # This allows macvlan traffic from the Multus interface and adds
