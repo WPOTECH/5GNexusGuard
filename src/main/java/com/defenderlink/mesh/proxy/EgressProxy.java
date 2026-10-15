@@ -38,6 +38,9 @@ public class EgressProxy {
     private static final int BUFFER_SIZE = 8192;
 
     @Inject
+    com.defenderlink.mesh.tunnel.nativeaccess.AccessMode accessMode;
+
+    @Inject
     NodeIdentity identity;
 
     @Inject
@@ -51,6 +54,7 @@ public class EgressProxy {
      */
     @Scheduled(every = "5s")
     void syncEgressBindings() {
+        if (accessMode.nativeDual()) return;
         var myServices = ledger.getServicesByOwner(identity.getNodeId());
 
         // Start legacy 0.0.0.0 egress for services not yet tunnel-connected
@@ -77,6 +81,7 @@ public class EgressProxy {
     }
 
     private void startEgress(ServiceRecord service) {
+        accessMode.requireStandard();
         String[] bindParts = service.localBind().split(":");
         String localHost = bindParts.length > 1 ? bindParts[0] : "127.0.0.1";
         int localPort = Integer.parseInt(bindParts[bindParts.length - 1]);
@@ -202,6 +207,7 @@ public class EgressProxy {
     public int startEgressOnInterface(String tunnelIp, int egressPort,
                                       String svcHost, int svcPort, String serviceId) {
 
+        accessMode.requireStandard();
         String key = serviceId + ":" + tunnelIp;
         if (bindings.containsKey(key)) {
             log.info("Egress already active for svc='{}' on {}", serviceId, tunnelIp);

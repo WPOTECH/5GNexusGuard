@@ -19,3 +19,6 @@ src/main/resources/META-INF/resources/assets/
 wg-configs/
 *.key
 *.pub
+# Native dual runtime keys, leases and test credentials
+.native-dual/
+scripts/native-dual/__pycache__/

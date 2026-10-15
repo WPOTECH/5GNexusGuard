@@ -60,6 +60,9 @@ public class TunnelManager {
     String dataDir;
 
     @Inject
+    com.defenderlink.mesh.tunnel.nativeaccess.AccessMode accessMode;
+
+    @Inject
     NodeIdentity identity;
 
     @Inject
@@ -94,6 +97,7 @@ public class TunnelManager {
      */
 
     public ActiveTunnel ensureTunnel(String serviceId) throws Exception {
+        accessMode.requireStandard();
         String connKey = "conn:" + serviceId;
         ActiveTunnel existing = tunnels.get(connKey);
         if (existing != null && existing.isUp()) return existing;
@@ -207,6 +211,7 @@ public class TunnelManager {
             String initiatorEndpoint    // e.g. "192.168.5.104:51821"
     ) throws Exception {
 
+        accessMode.requireStandard();
         String ownerKey = "owner:" + serviceId + ":" + initiatorNodeId;
         ActiveTunnel existing = tunnels.get(ownerKey);
         if (existing != null) {

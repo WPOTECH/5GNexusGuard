@@ -27,6 +27,8 @@ import java.util.*;
 @Consumes(MediaType.APPLICATION_JSON)
 public class MeshResource {
 
+    @Inject com.defenderlink.mesh.tunnel.nativeaccess.AccessMode accessMode;
+
     @Inject NodeIdentity identity;
     @Inject LedgerStore ledger;
     @Inject RaftConsensus raft;
@@ -157,6 +159,10 @@ public class MeshResource {
     /** Connect to a remote service (creates tunnel + intercept proxy) */
     @POST @Path("/connect/{serviceId}")
     public Response connectToService(@PathParam("serviceId") String serviceId) {
+        if (accessMode.nativeDual()) {
+            return Response.status(409).entity(Map.of("mode", "NATIVE_DUAL",
+                    "error", "Use the provisioned endpoint namespace; this API creates STANDARD tunnels only")).build();
+        }
         try {
             ActiveTunnel tunnel = tunnelManager.ensureTunnel(serviceId);
             // interceptProxy.startIntercept() is now called inside ensureTunnel()
