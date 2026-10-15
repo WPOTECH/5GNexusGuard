@@ -1,4 +1,4 @@
-# Native Dual-Tunnel Access (bounded Linux implementation)
+# Native Dual-Tunnel: IKEv2/ESP outside WireGuard
 
 ## Baseline audit, before implementation
 
@@ -23,81 +23,149 @@ These findings constrain this feature. It does not repair or attest the entire
 control plane. Do not expose the existing management/consensus interfaces to an
 untrusted network. Ledger writers and host administrators remain trusted.
 
-## Scope and architecture
+## Hybrid architecture and status
 
-Opt-in `mesh.access.mode=NATIVE_DUAL`; default `STANDARD` retains existing behavior.
-One statically provisioned IPv4 TCP service, one pinned client node, one owner,
-one Linux kernel. Separate endpoint (`dlnd-e`), outer (`dlnd-o`), inner (`dlnd-i`),
-and resource (`dlnd-r`) network namespaces. This is a local native deployment
-primitive and reproducible lab, not automatic multi-host enrollment or UI support.
-Applications run inside the endpoint namespace; the resource process runs inside
-its own namespace. There is no host intercept or host resource listener.
+The intended production architecture is **outer IKEv2/IPsec ESP using strongSwan,
+inner WireGuard**. Implementation is a bounded Linux provisioning primitive and
+isolated lab, not a validated production deployment. `903684a` is the preserved
+WG-over-WG experimental reference. `scripts/native-dual/` and
+`docs/native-dual-results.md` remain unchanged; their historical results do not
+validate this hybrid. New work lives in `scripts/ipsec-dual/`.
 
+```text
+endpoint dlip-e                    outer gateway dlip-o
+app -> inner WG -> ESP === pub === strongSwan ESP termination
+                     192.0.2.1/30   192.0.2.2/30
+                                         |
+                              inner WG ciphertext UDP/51821
+                                         | transit 10.78.0.0/30
+                                  inner gateway dlip-i
+                                   WG termination
+                                         | authorized TCP only
+                                  resource dlip-r 10.80.0.2:8080
 ```
-application -> inner WG ciphertext -> outer WG ciphertext -> public veth
- endpoint                                             outer gateway
- inner WG <-------- encrypted inner UDP via private veth ------> inner gateway
-                                                               inner WG
-                                                                  |
-                                                            resource netns
-```
 
-Outer WG: endpoint 10.77.0.1 <-> outer gateway 10.77.0.2.
-Inner WG: endpoint 10.79.0.1 <-> inner gateway 10.79.0.2, UDP transported
-through outer WG to 10.78.0.2:51821. Resource: 10.80.0.2:8080.
-Four independently generated private keys; no key reuse between layers.
-WG devices and sockets are created in their respective namespaces. Outer and
-inner gateways have separate kernel routing/firewall state. Root on the shared
-host can access all keys: this is not a defense against host-root compromise.
+Endpoint inner transport source is 10.77.0.1/32 on loopback; inner gateway
+transport address is 10.78.0.2. Policy-based IPsec tunnel selectors admit only
+these /32s and UDP source/destination port 51821. Inner WG addresses are
+10.79.0.1/32 and 10.79.0.2/32; resource traffic routes exclusively via WG.
+There is no NAT, default route, host service listener or host-network attachment.
+Namespace names differ from the experimental reference.
 
-All namespace filter chains default drop (including IPv6). Exact /32 routes,
-no default route, no NAT, no forwarding except explicit inner UDP at the outer
-and authorized TCP at the inner. Endpoint resource traffic can only leave via
-inner WG; inner UDP can only leave via outer WG. Interface loss cannot create a
-plaintext fallback. Resource accepts only the inner client source and service
-port. No public service publication, gateway proxy, or STANDARD tunnel is started
-in native mode. Mode changes require restart and removal of old STANDARD
-interfaces/listeners before adopting this deployment.
+IKEv2 uses mutual certificate authentication, exact DNS SAN identities, a dedicated
+test CA, AES-256-GCM/PRF-SHA384/ECP384 for IKE and AES-256-GCM/ECP384 for ESP.
+MOBIKE is disabled in this fixed-address profile. Only IKE UDP/500, UDP/4500 and
+ESP are permitted on the public link. The lab requires native ESP in its public
+capture; NAT traversal interoperability is not tested. In the lab, certificates and RSA-3072
+private keys are generated at runtime outside git, expire after two days and are
+never suitable for production enrollment. The CA signing key is deleted after
+issuance. The standalone native supervisor instead requires explicit protected
+operator certificate profiles (`--credentials`); it never defaults to test PKI. Each daemon loads only its own private key and the outer CA. Inner WG
+keys are independently generated Curve25519 keys; neither CA trust nor ledger
+Ed25519 identity grants WG membership automatically.
 
-## Policy authority and trust
+The implementation follows the [strongSwan swanctl configuration reference](https://docs.strongswan.org/docs/5.9/swanctl/swanctlConf.html)
+and [nftables IPsec expressions](https://netfilter.org/projects/nftables/manpage.html).
+Each charon process has a separate VICI socket and private mount of `/run` to
+avoid shared PID files. Automatic strongSwan routes are disabled; exact routes
+are installed by the supervisor. No session keys are included in diagnostics:
+`ip xfrm state` output must not be exported.
 
-A product CDI component reads `LedgerStore` directly and atomically exports a
-maximum three-second lease. It requires an active owned TCP service with exact
-resource bind, active registered client and owner, explicit allowedNodes,
+## Product modes and authorization boundary
+
+`mesh.access.mode=STANDARD` remains the default. `NATIVE_DUAL` now denotes the
+hybrid transport and retains the guards on STANDARD listener/negotiation paths.
+Unknown mode or native gateway-mode values fail startup. Restart and remove any
+old STANDARD interfaces/listeners before changing modes.
+
+| Native gateway mode | Behavior |
+| --- | --- |
+| `NATIVE` (default) | Local ledger lease exporter enabled; separately provisioned strongSwan native gateway plus inner WG enforcement primitive |
+| `EXTERNAL_CONFIG` | Legacy tunnels still disabled; no lease export; renderer supplies an endpoint profile for a compatible third-party IKEv2 gateway |
+
+The HTTP connect response is 409 with explicit transport, gateway mode and
+operator-provisioning requirement. It never reports an active hybrid connection.
+Java does not launch Docker, enroll certificates, configure appliances, or create
+these namespaces. The renderer is an operator tool; gateway mode is not an
+automatic appliance integration. External deployments must separately implement
+inner WG forwarding and timed authorization. Local enforcement is deliberately
+not advertised or enabled by configuration-only external mode.
+
+The exporter consumes the existing local LedgerStore: active owned TCP service
+at exactly `10.80.0.2:8080`, active owner/client registrations, explicit membership,
 encryption enabled, unexpired policy, and no unsupported bandwidth/concurrency
-constraints. Unknown or invalid mode fails startup. Native mode disables legacy
-egress and both STANDARD tunnel creation paths. Existing HTTP connect does not
-pretend that a native namespace is a host intercept.
+constraints. It writes a private atomic version-2 lease with transport
+`IKEV2_ESP_WIREGUARD` and the pinned service/client/owner tuple. The new consumer
+rejects legacy, other-transport, malformed, denied, stale, future-dated, wrong-tuple,
+symlinked or permissively readable leases. The preserved version-1 experimental
+consumer rejects new leases. Run the historical checkpoint to reproduce its
+original exporter contract; do not relabel its WG-over-WG output as hybrid.
 
-The privileged native supervisor consumes this file, bound to the configured
-service/client/owner tuple. A timed nftables set authorizes both directions on
-every packet, including established connections. Denial flushes the set; missing,
-malformed or stale exports deny; exporter/supervisor death expires kernel access.
-This is a compatible local enforcement extension of existing ledger policy, not
-an independent harness policy authority. Static keys are operator-bound to the
-client identity in the protected configuration; there is no automated identity
-to WG enrollment. A compromised ledger writer can still grant access. Filesystem
-ownership and trusted local administration are part of the trust boundary.
+The native supervisor renews a timed nftables address set, capped at three seconds.
+Both TCP directions check the set on every packet, including established flows.
+Denial flushes it; exporter or supervisor death causes kernel expiry. The supervisor
+reconciles only owned host routes removed by link-down and withholds leases if the
+expected CHILD_SA is not installed; it retries the named SA at bounded intervals.
+This is not a demonstrated daemon-crash restart manager. Scheduling latency and
+clocks affect the bound; stale replicated ledger state is not detected.
+Ledger administrators, protected directory ownership and local host administration
+remain trusted. This is an enforcement extension, not new consensus or authenticated
+enrollment. The persisted-ledger Java fixture bypasses network consensus; the packet
+harness uses synthetic leases. Their passing separately would not establish an
+end-to-end running product/exporter/supervisor integration.
 
-Kernel authorization expires at most three seconds after its last installation;
-lease validation to installation has scheduling/command latency. Revocation is
-not instantaneous. A stale replicated ledger is not detected by this exporter;
-only the local authority's view is enforced. Clock rollback/forward can affect
-lease availability; the consumer caps accepted remaining duration to three seconds.
+## Fail-closed design and isolation
 
-## Threat model and limitations
+All namespace inet input/output/forward chains default drop, including IPv6.
+Endpoint WG transport must match outbound IPsec reqid 42; decrypted endpoint
+traffic and outer-gateway forwarding must match inbound/outbound IPsec policy.
+Missing SAs/policies cannot permit plaintext fallback. Resource traffic is admitted
+only through inner WG and a live authorization set. The outer gateway cannot
+originate resource TCP, and no established-flow accept bypasses authorization.
+Only exact service ports and routes are admitted. These properties were exercised
+in the isolated native test for the captured intervals; they are not a deployment-
+wide or external-gateway guarantee.
 
-Protect against public-link observers/injection, plaintext route fallback,
-unauthorized service ports, outer gateway inspection of resource plaintext,
-and stale local authorizations after process death. Inner gateway necessarily
-sees plaintext and resource metadata; the outer sees endpoint identity, timing,
-volume and inner gateway destination. An attacker with both gateway keys or
-host root defeats separation. Endpoint compromise exposes application data.
-Denial of service, global traffic analysis, malicious ledger administrators,
-control-plane authentication remediation, distributed deployment, roaming,
-IPv6 transport, DNS, UDP services, key rotation and production packaging are
-outside this bounded implementation. No claim of anonymity or production readiness.
+The launcher uses Docker `--network none`, read-only root, private tmpfs state,
+no host mounts/devices/socket, no port publishing and no `--privileged`. It drops
+all capabilities then adds NET_ADMIN (WG/XFRM/nft), NET_RAW (capture),
+NET_BIND_SERVICE (IKE), SYS_ADMIN (named netns/private mounts), SETUID and SETGID
+(tcpdump credential setup). This is the requested capability set for this harness,
+not a measured minimal kernel capability proof. Docker's default seccomp remains;
+AppArmor is explicitly unconfined because named namespaces require mount operations.
+No SYS_MODULE is granted: required kernel support must already exist. SYS_ADMIN
+and relaxed AppArmor remain significant trust: use a disposable Linux Docker host.
+The scripts do not change host routes, sysctls, firewall or network namespace.
+Docker image building requires package-network access and ordinary daemon storage.
 
-See `scripts/native-dual/README.md` for operation and `docs/native-dual-results.md`
-for executed evidence and blockers. Privileged packet tests are required before
-claiming the data-plane gates pass.
+## Threat model and limits
+
+Outer gateway sees encrypted WG transport and metadata, not resource plaintext.
+Inner gateway necessarily sees application plaintext. Separate key domains do not
+protect against root on the shared host, endpoint compromise, colluding gateways,
+malicious ledger writers, denial of service or traffic analysis. This bounded lab
+is one IPv4 TCP service/client/owner; it does not provide multi-host packaging,
+automated key binding, rotation/revocation infrastructure, roaming, IPv6 transport,
+DNS or UDP services. MTU is conservatively 1280; broad PMTU/performance testing is
+pending. Test CA issuance shares a filesystem with the lab operator; it is not an
+HSM or physical gateway trust separation.
+
+## Alternatives and future clients
+
+Nested WireGuard was retained as an experimental reference but shares a protocol
+implementation across layers. TLS at the application edge would not carry general
+packet traffic and would change the existing proxy model. IPsec transport-mode
+plus inner WG could be smaller, but the chosen narrowly selected tunnel-mode ESP
+supports an explicit outer termination boundary and distinct peer address spaces.
+A network-namespace/route-based XFRM interface design may be preferable for a
+multi-service deployment, but was not imposed on the current product before
+validating its existing ledger policy and privilege model. For mobile endpoints,
+IKEv2 roaming/NAT-T, OS VPN entitlements, sleep/wake recovery, captive portals and
+on-device secure key storage must be engineered and retested. This fixed-address
+Linux namespace prototype is not a mobile client.
+
+No pfSense device or VM has been tested. External mode expresses a compatibility
+profile only; it is not evidence of pfSense or other appliance interoperability.
+There is no claim of government approval, certification or production readiness.
+See [operation instructions](../../scripts/ipsec-dual/README.md) and
+[executed results](../testing/native-dual-tunnel-results.md).

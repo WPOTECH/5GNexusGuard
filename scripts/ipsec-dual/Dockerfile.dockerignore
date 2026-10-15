@@ -1,0 +1,5 @@
+**
+!scripts/
+!scripts/ipsec-dual/
+!scripts/ipsec-dual/**
+scripts/ipsec-dual/__pycache__/

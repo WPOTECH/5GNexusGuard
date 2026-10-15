@@ -39,7 +39,7 @@ public class NativePolicyExporter {
 
     @Scheduled(every = "1s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     void refresh() {
-        if (!mode.nativeDual()) return;
+        if (!mode.exportsLease()) return;
         Path temporary = null;
         try {
             String owner = identity.getNodeId();
@@ -61,7 +61,7 @@ public class NativePolicyExporter {
                 throw new IllegalStateException("Lease directory must be private and not symlinked");
             temporary = Files.createTempFile(directory, ".lease-", ".tmp",
                     PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
-            mapper.writeValue(temporary.toFile(), Map.of("version", 1, "serviceId", serviceId,
+            mapper.writeValue(temporary.toFile(), Map.of("version", 2, "transport", "IKEV2_ESP_WIREGUARD", "serviceId", serviceId,
                     "clientNodeId", clientId, "ownerNodeId", owner, "allowed", allowed,
                     "expiresAtMs", until));
             Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);

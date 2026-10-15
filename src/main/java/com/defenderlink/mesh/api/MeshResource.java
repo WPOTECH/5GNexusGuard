@@ -161,6 +161,8 @@ public class MeshResource {
     public Response connectToService(@PathParam("serviceId") String serviceId) {
         if (accessMode.nativeDual()) {
             return Response.status(409).entity(Map.of("mode", "NATIVE_DUAL",
+                    "transport", "IKEV2_ESP_WIREGUARD", "gatewayMode", accessMode.gatewayMode(),
+                    "provisioning", "EXTERNAL_OPERATOR_REQUIRED",
                     "error", "Use the provisioned endpoint namespace; this API creates STANDARD tunnels only")).build();
         }
         try {

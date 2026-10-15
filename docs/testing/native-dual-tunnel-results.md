@@ -1,0 +1,28 @@
+# Native hybrid dual-tunnel validation (2026-10-15)
+
+Checkpoint `903684a` preserves the unvalidated experimental WireGuard-over-WireGuard reference. Current branch: `feat/native-dual-tunnel-access`. The website repository was not edited.
+
+## Executed
+
+- `mvn -B -q test`: exit 0; Java ledger/access tests passed (including hybrid mode and lease export). This is not a running-product E2E test.
+- `python3 -m unittest discover -s scripts/ipsec-dual -p 'test_*.py' -v`: 8 tests passed. `python3 -m py_compile scripts/ipsec-dual/*.py`, `bash -n scripts/ipsec-dual/*.sh`, and `git diff --check` passed.
+- `bash scripts/ipsec-dual/run.sh --parent-approved /home/wpotech/.hermes/cache/scratch/ipsec-dual-evidence-22`: exit 0; all printed hybrid data-plane assertions passed. Repeat with evidence directory `ipsec-dual-evidence-23`: exit 0, same gates passed. Test certificates and private keys are generated only in private scratch/container state, not Git. These runs used synthetic short authorization leases, not a running Java exporter.
+- Captures in each evidence directory: `pub-endpoint.pcap` and `pub-gateway.pcap` contained ESP, not the application marker; `transit.pcap` and `inner-receive.pcap` contained inner WireGuard UDP/51821; `resource.pcap` contained the real TCP application marker. The checks also required live IKEv2/CHILD_SA and ESP packet counters in both directions plus independent inner WG handshake and transfer counters. The outer gateway has no inner private key. Public failure-phase capture `fail-closed-public.pcap` was checked for absence of plaintext/clear WG transport.
+- The harness positively delivered 53,248 bytes through both layers and exercised default denial, unauthorized resource/port denial, public and outer-gateway bypass denial, established-flow revocation, lease expiration, pub-link and WG-link outage/recovery, explicit SA removal/restore, wrong certificate identity, wrong WG peer, and injected public fallback route. It cleaned its owned namespaces. The endpoint `neural0` link remained down as at baseline; it was not modified.
+
+## Observed failure and correction
+
+Earlier runs (for example `ipsec-dual-evidence-21`) passed the initial nested traffic gates but failed `pub restore recovers`. After the outer gateway `pub` interface was administratively lowered and restored, its exact static `10.77.0.1/32` return route was absent. The endpoint established a fresh IKEv2 CHILD_SA and sent ESP; the gateway counted incoming ESP with zero outbound ESP. This localizes the return failure without attributing it to cryptography. The production supervisor now reconciles only the owned narrow routes, and the harness checks the same behavior. WireGuard activation was moved after the CHILD_SA was established, avoiding an initial-handshake readiness race. Both subsequent isolated runs passed the recovery gate without relaxing XFRM/ACL rules. The supervisor additionally withholds authorization without a matching installed CHILD_SA and retries that named CHILD_SA on a bounded interval; this supervisor path was not exercised in a complete live exporter/supervisor deployment.
+
+## Independent Codex security/debug review
+
+The read-only review found the missing return-route hypothesis; the subsequent run directly confirmed it. It also identified early WG startup before forwarding/IPsec (corrected) and incomplete failure-boundary evidence: the negative-phase capture observes endpoint public egress only, not continuous transit/resource captures or both directions at every fault. A denial during a broken route is not proof of the intended firewall gate. The review noted that the original supervisor only renewed authorization, with no SA reconciliation; a bounded SA check/retry was added, but process-crash recovery and live product integration remain unproven. Thus the security review is performed, not cleared for production acceptance.
+
+## Remaining acceptance gaps
+
+- No real pfSense instance or external IPsec gateway was available. `EXTERNAL_CONFIG` only renders a compatible-looking certificate/selector profile; pfSense negotiation, routing, rekey and recovery are BLOCKED.
+- No controlled, repeated STANDARD-versus-DUAL throughput/latency/CPU/memory/MTU/fragmentation measurements were made. There is no credible performance comparison. Kernel: 7.0.0-38-generic; tunnel implementations: Debian bookworm strongSwan and Linux WireGuard in the isolated image; IKE AES-256-GCM/PRF-SHA384/ECP384, ESP AES-256-GCM/ECP384. Version/package inventory and image metadata are retained in each scratch evidence directory. Do not infer an acceptable regression from packet counts alone.
+- STANDARD Java tests passed, but no full existing STANDARD traffic deployment was run. The production exporter and isolated namespace supervisor were tested separately, not as a deployed integrated service. Credential expiration/rotation, DNS failure, unexpected daemon crash, policy transition while connected, NAT-T and external-gateway operation remain untested. The gateway and endpoint share a Docker host/kernel in the lab; root compromise remains a shared failure domain.
+- Packet capture evidence supports the tested intervals only. Lack of marker at the outer gateway is not a general proof against an endpoint or host compromise. Neither CSfC approval nor production readiness is claimed.
+
+To reproduce the isolated test on a disposable Linux host with the required runtime approval, use `bash scripts/ipsec-dual/run.sh --parent-approved /absolute/private/scratch/evidence-new`. Never commit test credentials, session keys or private runtime logs. The files under `scripts/native-dual/` and `docs/native-dual-results.md` remain the experimental reference and are unchanged from the checkpoint.

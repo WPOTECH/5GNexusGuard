@@ -55,6 +55,22 @@ class NativePolicyExporterTest {
         mode.mode = "native_dual";
         assertThrows(IllegalStateException.class, mode::nativeDual);
     }
+    @Test void externalConfigurationCannotClaimLocalEnforcement(@TempDir Path directory) {
+        AccessMode mode = new AccessMode();
+        mode.mode = "NATIVE_DUAL";
+        assertTrue(mode.exportsLease());
+        mode.gateway = "EXTERNAL_CONFIG";
+        assertFalse(mode.exportsLease());
+        assertThrows(IllegalStateException.class, mode::requireStandard);
+        NativePolicyExporter exporter = new NativePolicyExporter();
+        exporter.mode = mode;
+        exporter.leaseFile = directory.resolve("lease.json").toString();
+        assertDoesNotThrow(exporter::refresh); // No ledger dependency: must not export.
+        assertFalse(Files.exists(Path.of(exporter.leaseFile)));
+        mode.gateway = "pfsense";
+        assertThrows(IllegalStateException.class, mode::gatewayMode);
+    }
+
     @Test void exporterUsesLedgerViewAndPublishesRevocation(@TempDir Path directory) throws Exception {
         Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------"));
         var records = new HashMap<String, ServiceRecord>();
@@ -73,6 +89,8 @@ class NativePolicyExporterTest {
         exporter.refresh();
         var lease = exporter.mapper.readTree(target.toFile());
         assertTrue(lease.get("allowed").asBoolean());
+        assertEquals(2, lease.get("version").asInt());
+        assertEquals("IKEV2_ESP_WIREGUARD", lease.get("transport").asText());
         assertEquals("client", lease.get("clientNodeId").asText());
         assertTrue(lease.get("expiresAtMs").asLong() <= System.currentTimeMillis() + 3000);
         assertEquals(PosixFilePermissions.fromString("rw-------"), Files.getPosixFilePermissions(target));

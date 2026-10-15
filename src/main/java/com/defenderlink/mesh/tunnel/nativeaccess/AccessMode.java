@@ -11,7 +11,20 @@ public class AccessMode {
     @ConfigProperty(name = "mesh.access.mode", defaultValue = "STANDARD")
     String mode;
 
-    void validate(@Observes StartupEvent event) { nativeDual(); }
+    @ConfigProperty(name = "mesh.native.gateway-mode", defaultValue = "NATIVE")
+    String gateway = "NATIVE";
+
+    void validate(@Observes StartupEvent event) { if (nativeDual()) gatewayMode(); }
+
+    public String gatewayMode() {
+        if (!"NATIVE".equals(gateway) && !"EXTERNAL_CONFIG".equals(gateway))
+            throw new IllegalStateException("mesh.native.gateway-mode must be NATIVE or EXTERNAL_CONFIG");
+        return gateway;
+    }
+
+    public boolean exportsLease() {
+        return nativeDual() && "NATIVE".equals(gatewayMode());
+    }
 
     public boolean nativeDual() {
         if ("STANDARD".equals(mode)) return false;
@@ -21,6 +34,6 @@ public class AccessMode {
 
     public void requireStandard() {
         if (nativeDual()) throw new IllegalStateException(
-                "NATIVE_DUAL uses the provisioned endpoint namespace; STANDARD negotiation is disabled");
+                "NATIVE_DUAL requires separately provisioned IKEv2/ESP + WireGuard; STANDARD negotiation is disabled");
     }
 }
