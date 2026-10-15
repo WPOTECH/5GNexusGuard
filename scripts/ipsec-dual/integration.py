@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Privileged data-plane gates. Synthetic leases here are NOT product-policy integration."""
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -58,6 +59,157 @@ def stop(child):
             child.wait(timeout=3)
         except subprocess.TimeoutExpired:
             child.kill(); child.wait()
+
+
+BOUNDARIES = (('e', 'pub', 'endpoint-public'), ('o', 'pub', 'outer-public'),
+              ('o', 'transit', 'outer-transit'), ('i', 'transit', 'inner-ingress'),
+              ('r', 'resource', 'resource'))
+
+
+def observe(topology, destination):
+    """Allowlisted metadata only: never XFRM state, credentials or packet payload."""
+    destination.mkdir(parents=True, exist_ok=True)
+    for role in ('e', 'o'):
+        (destination / (role + '-sas.txt')).write_text(topology.swan(role, '--list-sas')
+            if topology.daemon_roles[role].poll() is None else 'owned charon exited\n')
+        (destination / (role + '-policy.txt')).write_text(ns(role, 'ip', '-s', 'xfrm', 'policy'))
+    for role in NAMES:
+        (destination / (role + '-routes.txt')).write_text(ns(role, 'ip', 'route', 'show'))
+        (destination / (role + '-nft.txt')).write_text(ns(role, 'nft', 'list', 'ruleset'))
+
+
+def capture_phase(topology, evidence, label, action, expected):
+    """Each phase has five bidirectional captures and before/after observations."""
+    directory = evidence / label
+    directory.mkdir(parents=True, exist_ok=False)
+    captures = []
+    try:
+        for role, interface, boundary in BOUNDARIES:
+            directions = ('all', 'out') if boundary.endswith('public') else ('all',)
+            for direction in directions:
+                suffix = '-wire-egress' if direction == 'out' else ''
+                name = boundary + suffix
+                path = directory / (name + '.pcap')
+                log = directory / (name + '.capture-status')
+                args = ['tcpdump', '-Z', 'root', '-U', '-n']
+                if direction == 'out':
+                    args += ['-Q', 'out']
+                with log.open('w') as stream:
+                    child = process(role, *args, '-i', interface, '-w', str(path),
+                                    stdout=subprocess.DEVNULL, stderr=stream)
+                captures.append((name, path, log, child))
+        deadline = time.monotonic() + 3
+        while not all('listening on' in log.read_text() for _, _, log, _ in captures):
+            if time.monotonic() >= deadline or any(c.poll() is not None for _, _, _, c in captures):
+                raise AssertionError('capture readiness failed')
+            time.sleep(0.05)
+        observe(topology, directory / 'before')
+        action()
+        # Refresh after slow observations/injection so a denial cannot be lease expiry.
+        if expected is not None:
+            topology.authorize(3000)
+            check(label + ' live probe', probe() == expected)
+        observe(topology, directory / 'after')
+        time.sleep(1.1)
+    finally:
+        for _, _, _, child in captures:
+            stop(child)
+    for boundary, path, log, child in captures:
+        check(label + ' ' + boundary + ' capture intact',
+              path.exists() and path.stat().st_size >= 24 and child.returncode == 0
+              and re.search(r'^0 packets dropped by kernel$', log.read_text(), re.MULTILINE) is not None)
+        if boundary != 'resource':
+            public = boundary.startswith(('endpoint-public', 'outer-public'))
+            wire = boundary.endswith('-wire-egress')
+            # AF_PACKET may show post-XFRM decrypted WG on the receiving public
+            # interface. The separate outbound capture tests actual wire escape.
+            allowed = ('(ip proto 50 or udp port 500 or udp port 4500)'
+                       if wire else
+                       '(ip proto 50 or udp port 500 or udp port 4500 or udp port 51821)'
+                       if public else '(udp port 51821)')
+            disallowed = 'ip and not ' + allowed
+            if wire:
+                check(label + ' ' + boundary + ' pinned peers and no IPv6',
+                      not command('tcpdump', '-nn', '-r', str(path), 'ip6')
+                      and not command('tcpdump', '-nn', '-r', str(path),
+                                      'ip and not (host 192.0.2.1 and host 192.0.2.2)'))
+            check(label + ' ' + boundary + ' encrypted only',
+                  b'native-dual-packet-evidence' not in path.read_bytes()
+                  and not command('tcpdump', '-nn', '-r', str(path), disallowed))
+            if expected is True:
+                transport = 'ip proto 50' if public else 'udp port 51821'
+                check(label + ' ' + boundary + ' encrypted traffic observed',
+                      bool(command('tcpdump', '-nn', '-r', str(path), transport)))
+        elif expected is not None:
+            check(label + ' resource marker',
+                  (b'native-dual-packet-evidence' in path.read_bytes()) == expected)
+
+
+def run_fault(topology, evidence, label, inject, restore, failure_expected=False):
+    def lifecycle():
+        capture_phase(topology, evidence, label + '-baseline', lambda: None, True)
+        try:
+            capture_phase(topology, evidence, label + '-fault', inject, failure_expected)
+        finally:
+            # Recovery has its own captures, including link/daemon restart and retries.
+            def recover():
+                for _ in range(8):
+                    if not topology.reconcile_routes():
+                        topology.authorize(0)
+                        time.sleep(1)
+                        continue
+                    if not topology.ipsec_ready():
+                        try:
+                            topology.recover_ipsec()
+                        except RuntimeError:
+                            time.sleep(1)
+                            continue
+                    topology.authorize(3000)
+                    if probe():
+                        return
+                    time.sleep(1)
+                raise AssertionError(label + ' bounded recovery exhausted')
+            # A down interface cannot accept a new tcpdump attachment. The
+            # continuous envelope records restoration itself; phase captures
+            # begin once the interface/process is restored.
+            restore()
+            capture_phase(topology, evidence, label + '-recovery', recover, True)
+    # An overlapping capture covers the gaps between phase observers and starts.
+    capture_phase(topology, evidence, label + '-continuous', lifecycle, None)
+
+
+def readiness_extension(topology, evidence):
+    for role, interface in (('o', 'pub'), ('i', 'wg-inner')):
+        run_fault(topology, evidence, role + '-' + interface + '-outage',
+                  lambda: ns(role, 'ip', 'link', 'set', interface, 'down'),
+                  lambda: ns(role, 'ip', 'link', 'set', interface, 'up'))
+    run_fault(topology, evidence, 'sa-loss',
+              lambda: topology.swan('e', '--terminate', '--ike', 'hybrid', '--timeout', '3'),
+              topology.recover_ipsec)
+    for role in ('o', 'e'):
+        def crash():
+            child = topology.daemon_roles[role]
+            child.kill()
+            child.wait(timeout=3)
+            check(role + ' dead daemon never ready', not topology.ipsec_ready())
+            topology.authorize(0)
+            check(role + ' supervisor crash gate denies', not probe())
+        # Kernel SAs can survive SIGKILL. Do not reauthorize for the crash probe.
+        run_fault(topology, evidence, role + '-charon-crash', crash,
+                  topology.recover_ipsec, failure_expected=None)
+    def revoke_race():
+        # Bounded serialized policy transition with traffic in flight; no refresh worker.
+        topology.authorize(3000)
+        child = process('e', 'python3', '-c', CLIENT, '10.80.0.2', '8080',
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            topology.authorize(0)
+            child.wait(timeout=4)
+            check('post-revocation new flow denied', not probe())
+        finally:
+            stop(child)
+    run_fault(topology, evidence, 'revoke-inflight', revoke_race,
+              lambda: topology.authorize(3000), failure_expected=None)
 
 
 def main():
@@ -123,7 +275,7 @@ def main():
                           + ns(role, 'wg', 'show', 'wg-inner', 'latest-handshakes'), flush=True)
                 time.sleep(2)
                 raise AssertionError('resource reachable over nested tunnels')
-            check('resource reachable over nested tunnels', True)
+            check('resource reachable over nested tunnels', probe())
             for role, interface in (('e', 'wg-inner'), ('i', 'wg-inner')):
                 handshakes = ns(role, 'wg', 'show', interface, 'latest-handshakes').splitlines()
                 check(role + ' ' + interface + ' real handshake',
@@ -163,22 +315,20 @@ def main():
                 (evidence / (role + '-nft.txt')).write_text(ns(role, 'nft', 'list', 'ruleset'))
             for role in ('e', 'i'):
                 (evidence / (role + '-wg.txt')).write_text(ns(role, 'wg', 'show', 'wg-inner', 'transfer'))
-            # Keep a second public capture throughout the negative tests.
-            negative_capture = state / 'fail-closed-public.pcap'
-            negative_child = process('e', 'tcpdump', '-Z', 'root', '-U', '-n', '-Q', 'out', '-i', 'pub',
-                                     '-w', str(negative_capture), stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
-            children.append(negative_child)
-            captures.append((negative_capture, negative_child))
-            time.sleep(0.3)
-            check('negative capture started', negative_child.poll() is None)
-            topology.authorize(3000)
-            check('other live resource port denied', not probe(port=9090))
-            check('public service bypass denied', not probe(host='192.0.2.2'))
-            check('outer gateway cannot originate resource access', not probe(role='o'))
-            # An already-established TCP flow must lose authorization as well.
-            topology.authorize(3000)
-            live = process('e', 'python3', '-u', '-c', '''import socket,sys
+            readiness_extension(topology, evidence / 'faults')
+            fault_evidence = evidence / 'faults'
+            def bypasses():
+                for label, kwargs in (('wrong-port', {'port': 9090}),
+                                      ('public-bypass', {'host': '192.0.2.2'}),
+                                      ('outer-origin', {'role': 'o'})):
+                    topology.authorize(3000)
+                    check(label + ' denied', not probe(**kwargs))
+            run_fault(topology, fault_evidence, 'bypasses', bypasses, lambda: None,
+                      failure_expected=None)
+
+            def established_revocation():
+                topology.authorize(3000)
+                live = process('e', 'python3', '-u', '-c', '''import socket,sys
 s=socket.create_connection(("10.80.0.2",8080),1);s.settimeout(1)
 s.sendall(b"before");assert s.recv(6)==b"before"
 print("ready",flush=True);sys.stdin.readline()
@@ -187,117 +337,60 @@ try:
 except (TimeoutError,OSError): sys.exit(0)
 sys.exit(1 if data else 0)
 ''', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-            children.append(live)
-            import select
-            ready, _, _ = select.select([live.stdout], [], [], 3)
-            check('established flow ready', bool(ready) and live.stdout.readline().strip() == 'ready')
-            topology.authorize(0)
-            live.communicate('\n', timeout=4)
-            check('revocation blocks established flow', live.returncode == 0)
-            check('revocation blocks new flow', not probe())
-            topology.authorize(1000)
-            check('renewed authorization works', probe())
-            time.sleep(1.2)
-            check('kernel expiry without supervisor refresh', not probe())
-            # Down a layer with a valid lease: no alternative plaintext path.
-            for role, interface in (('o', 'pub'), ('i', 'wg-inner')):
-                topology.authorize(3000)
-                ns(role, 'ip', 'link', 'set', interface, 'down')
-                check(interface + ' loss fails closed', not probe())
-                ns(role, 'ip', 'link', 'set', interface, 'up')
-                check(interface + ' owned routes reconciled', topology.reconcile_routes())
-                for attempt in range(8):
-                    if attempt == 3 and interface == 'pub':
-                        topology.swan('e', '--terminate', '--ike', 'hybrid', '--timeout', '3')
-                        topology.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '8')
-                    topology.authorize(3000)
-                    if probe():
-                        break
-                    time.sleep(1)
-                else:
-                    print('RECOVERY DIAGNOSTIC route: '
-                          + ns('e', 'ip', 'route', 'get', '192.0.2.2'), flush=True)
-                    print('RECOVERY DIAGNOSTIC IKE: '
-                          + topology.swan('e', '--list-sas')[-1200:], flush=True)
-                    print('RECOVERY DIAGNOSTIC WG: '
-                          + ns('e', 'wg', 'show', 'wg-inner', 'latest-handshakes'), flush=True)
-                    print('RECOVERY DIAGNOSTIC gateway IKE: '
-                          + topology.swan('o', '--list-sas')[-1200:], flush=True)
-                    print('RECOVERY DIAGNOSTIC gateway return route: '
-                          + ns('o', 'ip', 'route', 'show', '10.77.0.1/32'), flush=True)
-                    print('RECOVERY DIAGNOSTIC gateway forwarding: '
-                          + ns('o', 'nft', 'list', 'chain', 'inet', 'ipsec_dual', 'forward'), flush=True)
-                    print('RECOVERY DIAGNOSTIC inner WG endpoint/transfer: '
-                          + ns('i', 'wg', 'show', 'wg-inner', 'endpoints') + ' / '
-                          + ns('i', 'wg', 'show', 'wg-inner', 'transfer'), flush=True)
-                    print('RECOVERY DIAGNOSTIC inner routes: '
-                          + ns('i', 'ip', 'route', 'get', '10.77.0.1'), flush=True)
-                    for side in ('e', 'o'):
-                        print('RECOVERY DIAGNOSTIC ' + side + ' link/neigh: '
-                              + ns(side, 'ip', '-br', 'link', 'show', 'dev', 'pub') + ' / '
-                              + ns(side, 'ip', 'neigh', 'show', 'dev', 'pub'), flush=True)
-                    raise AssertionError(interface + ' restore recovers')
-                check(interface + ' restore recovers', True)
-            # Explicit SA/policy loss must deny transport, even while routes remain.
-            topology.swan('e', '--terminate', '--ike', 'hybrid', '--timeout', '3')
-            topology.authorize(3000)
-            check('outer SA removal fails closed', not probe())
-            topology.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '8')
-            topology.authorize(3000)
-            check('outer SA restore recovers', probe())
-            # CA-trusted certificate with the wrong pinned identity must be rejected.
-            topology.swan('e', '--terminate', '--ike', 'hybrid', '--timeout', '3')
+                children.append(live)
+                import select
+                ready, _, _ = select.select([live.stdout], [], [], 3)
+                check('established flow ready', bool(ready) and live.stdout.readline().strip() == 'ready')
+                topology.authorize(0)
+                live.communicate('\n', timeout=4)
+                check('revocation blocks established flow', live.returncode == 0)
+                check('revocation blocks new flow', not probe())
+            run_fault(topology, fault_evidence, 'established-revocation', established_revocation,
+                      lambda: None, failure_expected=None)
+
+            def expire_lease():
+                topology.authorize(1000)
+                check('short lease initially works', probe())
+                time.sleep(1.2)
+                check('kernel lease expiry without refresh', not probe())
+            run_fault(topology, fault_evidence, 'lease-expiry', expire_lease,
+                      lambda: None, failure_expected=None)
+
             conf = state / 'e/swanctl.conf'
             original_conf = conf.read_text()
-            conf.write_text(original_conf.replace('id = gateway.test', 'id = wrong.test'))
-            topology.swan('e', '--load-conns', '--file', str(conf))
-            rejected = False
-            try:
-                topology.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '3')
-            except RuntimeError:
-                rejected = True
-            check('wrong pinned certificate identity rejected', rejected)
-            topology.authorize(3000)
-            check('wrong certificate identity denies resource', not probe())
-            # Clear pending failed negotiation before restoring the connection.
-            try:
+            def wrong_identity():
                 topology.swan('e', '--terminate', '--ike', 'hybrid', '--timeout', '3')
-            except RuntimeError:
-                pass
-            conf.write_text(original_conf)
-            topology.swan('e', '--load-conns', '--file', str(conf))
-            topology.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '8')
-            topology.authorize(3000)
-            check('certificate profile restore recovers', probe())
-            # Remove a valid peer and substitute a separately generated wrong key.
+                conf.write_text(original_conf.replace('id = gateway.test', 'id = wrong.test'))
+                topology.swan('e', '--load-conns', '--file', str(conf))
+                rejected = False
+                try:
+                    topology.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '3')
+                except RuntimeError:
+                    rejected = True
+                check('wrong pinned identity rejected', rejected)
+            def restore_identity():
+                try:
+                    topology.swan('e', '--terminate', '--ike', 'hybrid', '--timeout', '3')
+                except RuntimeError:
+                    pass
+                conf.write_text(original_conf)
+                topology.swan('e', '--load-conns', '--file', str(conf))
+            run_fault(topology, fault_evidence, 'wrong-identity', wrong_identity, restore_identity)
+
             original = ns('e', 'wg', 'show', 'wg-inner', 'peers')
             wrong = command('wg', 'pubkey', data=command('wg', 'genkey') + '\n')
-            ns('e', 'wg', 'set', 'wg-inner', 'peer', original, 'remove')
-            ns('e', 'wg', 'set', 'wg-inner', 'peer', wrong, 'allowed-ips', '10.80.0.2/32',
-               'endpoint', '10.78.0.2:51821')
-            topology.authorize(3000)
-            check('wrong inner peer cannot reach resource', not probe())
-            ns('e', 'wg', 'set', 'wg-inner', 'peer', wrong, 'remove')
-            ns('e', 'wg', 'set', 'wg-inner', 'peer', original, 'allowed-ips', '10.80.0.2/32',
-               'endpoint', '10.78.0.2:51821', 'persistent-keepalive', '1')
-            topology.authorize(3000)
-            # Handshake retries after a peer replacement may take several seconds.
-            for _ in range(6):
-                topology.authorize(3000)
-                if probe():
-                    break
-                time.sleep(1)
-            topology.authorize(3000)
-            check('correct inner peer restored before fallback test', probe())
-            # Even an injected fallback route must be rejected by endpoint egress policy.
-            ns('e', 'ip', 'route', 'replace', '10.80.0.2/32', 'via', '192.0.2.2', 'dev', 'pub')
-            topology.authorize(3000)
-            check('injected public fallback route blocked', not probe())
-            stop(negative_child)
-            check('failure tests emit no public plaintext or WG transport',
-                  not command('tcpdump', '-nn', '-r', str(negative_capture),
-                              'ip and not (ip proto 50 or udp port 500 or udp port 4500)')
-                  and b'native-dual-packet-evidence' not in negative_capture.read_bytes())
+            def wrong_peer():
+                ns('e', 'wg', 'set', 'wg-inner', 'peer', original, 'remove')
+                ns('e', 'wg', 'set', 'wg-inner', 'peer', wrong, 'allowed-ips', '10.80.0.2/32',
+                   'endpoint', '10.78.0.2:51821')
+            def restore_peer():
+                ns('e', 'wg', 'set', 'wg-inner', 'peer', wrong, 'remove')
+                ns('e', 'wg', 'set', 'wg-inner', 'peer', original, 'allowed-ips', '10.80.0.2/32',
+                   'endpoint', '10.78.0.2:51821', 'persistent-keepalive', '1')
+            run_fault(topology, fault_evidence, 'wrong-inner-peer', wrong_peer, restore_peer)
+            run_fault(topology, fault_evidence, 'fallback-route',
+                      lambda: ns('e', 'ip', 'route', 'replace', '10.80.0.2/32',
+                                 'via', '192.0.2.2', 'dev', 'pub'), topology.reconcile_routes)
             (evidence / 'packages.txt').write_text(command('dpkg-query', '-W'))
             print('PASS all hybrid data-plane gates (synthetic policy; see Java policy tests).')
             return 0
@@ -325,7 +418,5 @@ if __name__ == '__main__':
         sys.exit(main())
     except Exception as error:
         # No subprocess output or key material is included.
-        import traceback
-        traceback.print_exc()
         print('FAIL native data-plane gate: ' + type(error).__name__, file=sys.stderr)
         sys.exit(1)

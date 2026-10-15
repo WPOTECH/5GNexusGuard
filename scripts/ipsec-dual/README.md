@@ -62,8 +62,12 @@ Gates include nested TCP echo, packet-layer visibility, both encrypted layers'
 counters, default denial, live wrong-port denial, public bypass, outer-origin
 bypass, established-flow revocation, lease expiry, layer outage/recovery, SA
 removal/recovery, wrong certificate identity, wrong inner key, and a restored
-valid peer followed by an injected public fallback route. A second public pcap
-covers failure scenarios. The packet harness calls the timed set with synthetic
+valid peer followed by an injected public fallback route. Per-fault baseline, failure, recovery and overlapping continuous pcaps now cover
+all five boundaries in both directions, with before/after SA, route and nft
+observations. Each baseline must deliver a live authorized echo. Owned endpoint
+and gateway charon crash/restart and bounded in-flight revocation checks are
+included; these cases passed the isolated `ipsec-dual-readiness-3` run (see
+results), but have not passed full-product integration. The packet harness calls the timed set with synthetic
 authorization; it is not a running product-ledger integration test.
 
 For the local product adapter, set:
@@ -96,3 +100,21 @@ lease export while retaining STANDARD guards, so it cannot imply local enforceme
 Normal failures clean up owned namespaces and processes. Container deletion is the
 final cleanup boundary. An interrupted standalone supervisor can leave namespace
 state: it refuses to adopt existing names, rather than deleting unknown state.
+
+Read the [bounded security review](../../docs/testing/native-dual-tunnel-security-review.md)
+for supervisor fixes, evidence semantics and explicit BLOCKED acceptance work.
+DNS-dependent failure, runtime certificate expiration, full exporter/supervisor
+races and full-product integration remain unresolved. Certificate expiration must
+not be inferred from lease expiry or wrong-identity rejection. No production
+readiness is claimed by the unprivileged regression suite:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/ipsec-dual -p 'test_*.py' -v
+```
+
+The supervisor now samples lease lifetime after health checks, verifies both owned
+charon processes are alive, revokes access before bounded daemon recovery, and
+restores exact owned routes even when a wrong route exists. Recovery never issues
+new credentials, widens selectors, or relaxes ACLs. Kernel SAs may survive daemon
+death; fail-closed crash handling depends on supervisor detection and the timed
+lease. See the review for remaining timing and readiness limits.

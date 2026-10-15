@@ -16,16 +16,12 @@ NAMES = {r: 'dlip-' + r for r in 'eoir'}
 
 
 def command(*args, data=None):
-    result = subprocess.run(args, input=data, text=True, capture_output=True, timeout=10)
+    try:
+        result = subprocess.run(args, input=data, text=True, capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('native command timed out (details suppressed)') from None
     if result.returncode:
-        # Do not dump arguments/output: future commands may contain sensitive data.
-        detail = ('; '.join(line for line in result.stderr.splitlines()
-                            if not line.startswith("plugin '") )[-1000:]
-                  if 'wg' in args or 'swanctl' in args else '')
-        if 'swanctl' in args:
-            detail += '; ' + result.stdout[-1000:].replace('\n', '; ')
-        raise RuntimeError('native command failed: ' + args[0] + ' (exit '
-                           + str(result.returncode) + '; ' + detail + ')')
+        raise RuntimeError('native command failed (exit ' + str(result.returncode) + ')')
     return result.stdout.strip()
 
 
@@ -71,6 +67,9 @@ def read_lease(path, uid):
 
 
 def firewall(role, inputs='', outputs='', forwards='', extra=''):
+    # Observe allowed traffic without broadening any match or verdict.
+    inputs, outputs, forwards = (re.sub(r'(?<!counter) accept', ' counter accept', rules)
+                                 for rules in (inputs, outputs, forwards))
     ns(role, 'nft', '-f', '-', data=f'''table inet ipsec_dual {{
  {extra}
  chain input {{ type filter hook input priority 0; policy drop;
@@ -94,6 +93,7 @@ class Topology:
         self.created = []
         self.keys = []
         self.daemons = []
+        self.daemon_roles = {}
 
     def link(self, left, right, name, a, b):
         # Create inside a namespace, never attach interfaces to host network.
@@ -205,20 +205,39 @@ class Topology:
         ready = True
         for role, destination, via in routes:
             try:
-                if not ns(role, 'ip', 'route', 'show', destination):
-                    ns(role, 'ip', 'route', 'replace', destination, *via)
+                ns(role, 'ip', 'route', 'replace', destination, *via)
             except RuntimeError:
                 ready = False
         return ready
 
     def ipsec_ready(self):
+        if any(role not in self.daemon_roles or self.daemon_roles[role].poll() is not None
+               for role in ('e', 'o')):
+            return False
+        def established(role, local, remote):
+            status = self.swan(role, '--list-sas')
+            for match in re.finditer(r'^hybrid: #\d+, ESTABLISHED, IKEv2, '
+                                     r'([0-9a-f]{16})_i\*? ([0-9a-f]{16})_r\*?$',
+                                     status, re.MULTILINE):
+                next_sa = status.find('\nhybrid:', match.end())
+                section = status[match.end():next_sa if next_sa >= 0 else None]
+                child = re.search(r'(?m)^[ \t]{0,2}inner-transport: #\d+, reqid 42, '
+                                  r'INSTALLED, TUNNEL, ESP:', section)
+                if child is None:
+                    continue
+                remainder = section[child.end():]
+                next_child = re.search(r'(?m)^[ \t]{0,2}[\w-]+: #\d+,', remainder)
+                child_section = remainder[:next_child.start() if next_child else None]
+                if ('local  ' + local in child_section
+                        and 'remote ' + remote in child_section):
+                    return match.group(1, 2)
+            return None
         try:
-            status = self.swan('e', '--list-sas')
-            return ('hybrid: #' in status and 'ESTABLISHED, IKEv2' in status
-                    and 'inner-transport: #' in status
-                    and 'reqid 42, INSTALLED, TUNNEL, ESP:' in status
-                    and 'local  10.77.0.1/32[17/51821]' in status
-                    and 'remote 10.78.0.2/32[17/51821]' in status)
+            endpoint = established('e', '10.77.0.1/32[17/51821]',
+                                   '10.78.0.2/32[17/51821]')
+            gateway = established('o', '10.78.0.2/32[17/51821]',
+                                  '10.77.0.1/32[17/51821]')
+            return endpoint is not None and endpoint == gateway
         except RuntimeError:
             return False
 
@@ -232,22 +251,56 @@ class Topology:
         else:
             provision_operator(self.state, self.credentials)
         for role in ('o', 'e'):
-            directory = self.state / role
-            log = open(directory / 'charon.log', 'w')
+            self.start_daemon(role)
+        self.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '8')
+
+    def start_daemon(self, role):
+        """Restart only a process owned by this instance; never regenerate credentials."""
+        if role not in ('e', 'o'):
+            raise ValueError('invalid daemon role')
+        old = self.daemon_roles.get(role)
+        if old is not None and old.poll() is None:
+            raise RuntimeError('refusing to replace live charon')
+        directory = self.state / role
+        # A killed charon can leave its private VICI socket behind.
+        (directory / 'vici').unlink(missing_ok=True)
+        with open(directory / 'charon.log', 'a') as log:
             child = subprocess.Popen(['ip', 'netns', 'exec', NAMES[role],
                 'env', 'STRONGSWAN_CONF=' + str(directory / 'strongswan.conf'),
                 'unshare', '-m', '--propagation', 'private', 'sh', '-c',
                 'mount -t tmpfs tmpfs /run && exec /usr/lib/ipsec/charon'], stdout=log, stderr=log)
-            log.close()
-            self.daemons.append(child)
-            for _ in range(50):
-                if (directory / 'vici').exists():
-                    break
-                if child.poll() is not None:
-                    raise RuntimeError('charon exited; inspect private runtime log')
-                time.sleep(0.1)
-            self.swan(role, '--load-all', '--file', str(directory / 'swanctl.conf'))
-        self.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '8')
+        self.daemons.append(child)
+        self.daemon_roles[role] = child
+        for _ in range(5):
+            if child.poll() is not None:
+                raise RuntimeError('charon exited (private log retained)')
+            try:
+                self.swan(role, '--load-all', '--file', str(directory / 'swanctl.conf'))
+                return
+            except RuntimeError:
+                time.sleep(1)
+        # Never leave a live but unloaded process that subsequent retries adopt.
+        child.kill()
+        child.wait(timeout=3)
+        raise RuntimeError('charon readiness timed out')
+
+    def recover_ipsec(self):
+        """Fail closed before bounded recovery; stale kernel SAs are not readiness."""
+        self.authorize(0)
+        surviving = [role for role in ('e', 'o') if role in self.daemon_roles
+                     and self.daemon_roles[role].poll() is None]
+        restarted = False
+        for role in ('o', 'e'):
+            child = self.daemon_roles.get(role)
+            if child is None or child.poll() is not None:
+                self.start_daemon(role)
+                restarted = True
+        if restarted:
+            for role in surviving:
+                if 'hybrid: #' in self.swan(role, '--list-sas'):
+                    # A failed teardown on the surviving daemon must not be ignored.
+                    self.swan(role, '--terminate', '--ike', 'hybrid', '--force')
+        self.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '3')
 
     def authorize(self, milliseconds):
         # One atomic nft transaction, no established-flow exception around this set.
@@ -288,6 +341,18 @@ class Topology:
             path.unlink(missing_ok=True)
         if failed:
             print('Native cleanup incomplete; inspect dlip-* namespaces.', file=sys.stderr)
+
+
+def renew_authorization(topology, args, ready):
+    # Read AFTER slow health checks; never reuse a duration sampled before them.
+    milliseconds = 0
+    if ready:
+        try:
+            milliseconds = remaining_ms(read_lease(args.lease, args.ledger_uid), args.service,
+                                        args.client, args.owner, time.time_ns() // 1_000_000)
+        except (OSError, ValueError, TypeError):
+            pass
+    topology.authorize(milliseconds)
 
 
 def require_container():
@@ -331,22 +396,14 @@ def main():
         print('Native namespaces ready; access requires a current ledger lease.', flush=True)
         last_retry = 0.0
         while True:
-            milliseconds = 0
-            try:
-                milliseconds = remaining_ms(read_lease(args.lease, args.ledger_uid), args.service,
-                                            args.client, args.owner, time.time_ns() // 1_000_000)
-            except (OSError, ValueError, TypeError):
-                pass
             routes_ready = topology.reconcile_routes()
             sa_ready = topology.ipsec_ready()
-            if not (routes_ready and sa_ready):
-                milliseconds = 0
-            topology.authorize(milliseconds)
+            renew_authorization(topology, args, routes_ready and sa_ready)
             # Retry only the named CHILD_SA; never relax routes, XFRM or ACLs.
             if routes_ready and not sa_ready and time.monotonic() - last_retry >= 5:
                 last_retry = time.monotonic()
                 try:
-                    topology.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '3')
+                    topology.recover_ipsec()
                 except RuntimeError:
                     pass
             time.sleep(0.2)

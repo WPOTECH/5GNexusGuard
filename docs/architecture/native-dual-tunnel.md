@@ -105,9 +105,11 @@ The native supervisor renews a timed nftables address set, capped at three secon
 Both TCP directions check the set on every packet, including established flows.
 Denial flushes it; exporter or supervisor death causes kernel expiry. The supervisor
 reconciles only owned host routes removed by link-down and withholds leases if the
-expected CHILD_SA is not installed; it retries the named SA at bounded intervals.
-This is not a demonstrated daemon-crash restart manager. Scheduling latency and
-clocks affect the bound; stale replicated ledger state is not detected.
+expected CHILD_SA is not installed; it retries the named SA at bounded intervals
+and restarts only its tracked, dead charon children after revoking authorization.
+This recovery ran in the isolated lab but is not a demonstrated complete product
+service manager. Scheduling latency and clocks affect the lease bound; stale
+replicated ledger state is not detected.
 Ledger administrators, protected directory ownership and local host administration
 remain trusted. This is an enforcement extension, not new consensus or authenticated
 enrollment. The persisted-ledger Java fixture bypasses network consensus; the packet
