@@ -151,9 +151,10 @@ class Topology:
         firewall('i',
             'iifname "transit" ip saddr 10.77.0.1 udp sport 51821 udp dport 51821 accept',
             'oifname "transit" ip daddr 10.77.0.1 udp sport 51821 udp dport 51821 accept',
-            'iifname "wg-inner" oifname "resource" ip saddr @authorized ip daddr 10.80.0.2 tcp dport 8080 accept\n'
-            'iifname "resource" oifname "wg-inner" ip saddr 10.80.0.2 ip daddr @authorized tcp sport 8080 ct state established accept',
-            'set authorized { type ipv4_addr; flags timeout; timeout 3s; }')
+            'iifname "wg-inner" oifname "resource" ip saddr @authorized ip daddr 10.80.0.2 tcp dport 8080 jump absolute_lease\n'
+            'iifname "resource" oifname "wg-inner" ip saddr 10.80.0.2 ip daddr @authorized tcp sport 8080 ct state established jump absolute_lease',
+            'set authorized { type ipv4_addr; flags timeout; timeout 3s; }\n'
+            'chain absolute_lease { }')
         firewall('r',
             'iifname "resource" ip saddr 10.79.0.1 ip daddr 10.80.0.2 tcp dport 8080 accept',
             'oifname "resource" ip saddr 10.80.0.2 ip daddr 10.79.0.1 tcp sport 8080 ct state established accept')
@@ -302,12 +303,21 @@ class Topology:
                     self.swan(role, '--terminate', '--ike', 'hybrid', '--force')
         self.swan('e', '--initiate', '--child', 'inner-transport', '--timeout', '3')
 
-    def authorize(self, milliseconds):
-        # One atomic nft transaction, no established-flow exception around this set.
-        rule = 'flush set inet ipsec_dual authorized\n'
-        if milliseconds > 0:
-            rule += ('add element inet ipsec_dual authorized { 10.79.0.1 timeout '
-                     + str(min(milliseconds, 3000)) + 'ms }\n')
+    def authorize(self, milliseconds, deadline_ms=None):
+        # Atomic denial/renewal: both directions jump through the same kernel
+        # packet-time deadline gate; a delayed nft command cannot move that date.
+        now_ms = time.time_ns() // 1_000_000
+        if deadline_ms is None and milliseconds > 0:
+            deadline_ms = now_ms + milliseconds  # Synthetic lab policy only.
+        remaining = min(milliseconds, 3000, deadline_ms - now_ms) if deadline_ms else 0
+        deadline_s = deadline_ms // 1000 if deadline_ms else 0
+        rule = ('flush chain inet ipsec_dual absolute_lease\n'
+                'flush set inet ipsec_dual authorized\n')
+        if remaining > 0 and deadline_s > now_ms // 1000:
+            rule += ('add rule inet ipsec_dual absolute_lease meta time < '
+                     + str(deadline_s) + ' counter accept\n'
+                     'add element inet ipsec_dual authorized { 10.79.0.1 timeout '
+                     + str(remaining) + 'ms }\n')
         ns('i', 'nft', '-f', '-', data=rule)
 
     def close(self):
@@ -346,13 +356,20 @@ class Topology:
 def renew_authorization(topology, args, ready):
     # Read AFTER slow health checks; never reuse a duration sampled before them.
     milliseconds = 0
+    deadline_ms = None
     if ready:
         try:
-            milliseconds = remaining_ms(read_lease(args.lease, args.ledger_uid), args.service,
+            lease = read_lease(args.lease, args.ledger_uid)
+            milliseconds = remaining_ms(lease, args.service,
                                         args.client, args.owner, time.time_ns() // 1_000_000)
+            if milliseconds and isinstance(lease, dict):
+                deadline_ms = lease['expiresAtMs']
         except (OSError, ValueError, TypeError):
             pass
-    topology.authorize(milliseconds)
+    if deadline_ms is None:
+        topology.authorize(0)
+    else:
+        topology.authorize(milliseconds, deadline_ms=deadline_ms)
 
 
 def require_container():

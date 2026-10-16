@@ -131,6 +131,54 @@ Implemented cases (subsequently exercised by the isolated
   exporter/supervisor deployment acceptance is claimed. Marker absence only speaks
   to the captured synthetic traffic, not all possible plaintext or host compromise.
 
+## P0 follow-up — partial, HIGH findings still open
+
+The relative-only nft timeout was installed after the lease had been sampled. A slow
+supervisor could therefore create a fresh full-duration permission after the source
+lease expired. The new experimental `authorize(milliseconds, deadline_ms)` resamples
+wall time at enforcement, bounds the relative timeout, and atomically replaces the
+owned set and `absolute_lease` chain. Both directions, including established return
+traffic, pass through a `meta time < floor(deadline_ms / 1000)` packet-time guard.
+An already-expired ledger deadline installs no permission. `supervisor_step` passes
+the exporter's fixed `expiresAtMs`; a delayed installation or replay of the same
+expired record is denied. The isolated `ipsec-dual-p0-3` packet run passed an
+established-flow expiry and expired-record replay (979 gates), but its lease was
+synthetic. Truncation denies up to nearly a second early, not late, under a stable
+clock. Relative nft element expiry is monotonic whereas `meta time` uses wall time:
+a backward wall-clock step can reopen an unexpired relative element after the wall
+deadline, and relative-only reconciliation cannot prove the absolute deadline.
+No clock-shift packet proof or immutable monotonic/boottime binding exists. **HIGH
+absolute-deadline finding remains open.** An independent read-only Codex review
+replayed the same lease with mocked wall times: `remaining_ms` returned 0 after
+expiry, then 1999 ms following rollback. This is code-level reproduction, not a
+clock-shift packet run.
+
+A crashed charon can leave kernel XFRM SAs/policies installed and an already-granted
+firewall element active. `recover_ipsec()` revokes first when invoked, but a stalled
+or crashed supervisor cannot run it. The current crash harness calls revoke before
+its denial probe, so it does not measure death-to-denial exposure. The installed
+three-second relative element is an independent finite gate only if it is not
+renewed from stale health. There is no separate kernel-enforced health deadline,
+heartbeat freshness test, or measured maximum crash exposure. **HIGH surviving-SA
+finding remains open.** Independent Codex reproduced a daemon exiting during
+sequential SA queries while `ipsec_ready()` still returned true; a ten-second
+command timeout permits slow stale-health use. This is a mocked interleaving, not
+a packet-level death-to-denial bound. Do not globally flush XFRM; teardown of
+owned kernel states must be exact and must preserve unrelated connections.
+
+STANDARD's direct `/usr/bin/wg setconf` fails on `openat` of its config with EACCES;
+even a world-readable dummy config in the same isolated container fails. A copy of
+the same executable in the container succeeds, and the two-product-JVM application
+traffic smoke passes through that temporary harness-only executable path. The
+original binary's execution-time security identity/denial policy has not been
+established, so this is not a production permission fix. An earlier independent
+review additionally classified STANDARD interface/config naming collisions as
+HIGH, connector teardown map-key mismatch as HIGH, and initial secret-file mode
+handling as MEDIUM. These are not corrections in this P0 delta. The new read-only
+Codex review of the native P0 delta established two remaining HIGH findings and
+no new CRITICAL finding; its full output is kept privately under
+`/home/wpotech/.hermes/cache/scratch/p0-independent-review.log`.
+
 ## Unprivileged validation executed
 
 From the repository root:

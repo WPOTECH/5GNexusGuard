@@ -101,15 +101,21 @@ symlinked or permissively readable leases. The preserved version-1 experimental
 consumer rejects new leases. Run the historical checkpoint to reproduce its
 original exporter contract; do not relabel its WG-over-WG output as hybrid.
 
-The native supervisor renews a timed nftables address set, capped at three seconds.
-Both TCP directions check the set on every packet, including established flows.
-Denial flushes it; exporter or supervisor death causes kernel expiry. The supervisor
-reconciles only owned host routes removed by link-down and withholds leases if the
-expected CHILD_SA is not installed; it retries the named SA at bounded intervals
-and restarts only its tracked, dead charon children after revoking authorization.
-This recovery ran in the isolated lab but is not a demonstrated complete product
-service manager. Scheduling latency and clocks affect the lease bound; stale
-replicated ledger state is not detected.
+The native supervisor renews a timed nftables address set, capped at three seconds,
+and experimentally adds a packet-time wall-clock deadline derived from the fixed
+exported `expiresAtMs`. Both TCP directions traverse the set and deadline chain on
+every packet, including established flows. Denial atomically clears the owned set
+and chain; exporter/supervisor death leaves an expiring set only if no stale-health
+writer renews it. The supervisor reconciles only owned routes removed by link-down
+and withholds leases if the expected CHILD_SA is not installed; it retries the
+named SA at bounded intervals and restarts only its tracked, dead charon children
+after revoking authorization. This recovery ran in the isolated lab but is not a
+demonstrated complete product service manager. nft relative expiration and wall
+`meta time` use distinct clock domains: rollback can revive an otherwise expired
+lease, while daemon death can precede its detection and stale-health renewal.
+Neither HIGH failure mode is closed. A production boundary needs an independently
+expiring health observation and rollback-safe lease binding, plus packet-level
+failure-bound measurements. Stale replicated ledger state is not detected.
 Ledger administrators, protected directory ownership and local host administration
 remain trusted. This is an enforcement extension, not new consensus or authenticated
 enrollment. The persisted-ledger Java fixture bypasses network consensus; the packet

@@ -349,10 +349,31 @@ sys.exit(1 if data else 0)
                       lambda: None, failure_expected=None)
 
             def expire_lease():
-                topology.authorize(1000)
+                # The packet gate truncates to whole seconds, conservatively.
+                # Keep an established TCP socket active across the fixed deadline.
+                deadline_ms = time.time_ns() // 1_000_000 + 2500
+                topology.authorize(3000, deadline_ms=deadline_ms)
                 check('short lease initially works', probe())
-                time.sleep(1.2)
+                live = process('e', 'python3', '-u', '-c', '''import socket,sys
+s=socket.create_connection(("10.80.0.2",8080),1);s.settimeout(1)
+s.sendall(b"before");assert s.recv(6)==b"before"
+print("ready",flush=True);sys.stdin.readline()
+try:
+ s.sendall(b"after"); data=s.recv(5)
+except (TimeoutError,OSError): sys.exit(0)
+sys.exit(1 if data else 0)
+''', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                children.append(live)
+                import select
+                assert live.stdout is not None
+                ready, _, _ = select.select([live.stdout], [], [], 3)
+                check('expiry established flow ready', bool(ready) and live.stdout.readline().strip() == 'ready')
+                time.sleep(2.7)
+                live.communicate('\n', timeout=4)
+                check('kernel expiry blocks established flow', live.returncode == 0)
                 check('kernel lease expiry without refresh', not probe())
+                topology.authorize(3000, deadline_ms=deadline_ms)
+                check('expired lease replay cannot reopen traffic', not probe())
             run_fault(topology, fault_evidence, 'lease-expiry', expire_lease,
                       lambda: None, failure_expected=None)
 

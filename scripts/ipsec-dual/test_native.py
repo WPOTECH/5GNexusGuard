@@ -232,6 +232,26 @@ class RecoveryTests(unittest.TestCase):
             renew_authorization(topology, args, False)
             read.assert_not_called()
 
+    def test_authorization_binds_to_absolute_packet_time_not_delayed_install(self):
+        from native import Topology
+        topology = Topology(Path('/unused'))
+        with patch('native.time.time_ns', return_value=1000000000000), patch('native.ns') as ns:
+            topology.authorize(3000, deadline_ms=1002999)
+        rule = ns.call_args.kwargs['data']
+        self.assertIn('meta time < 1002', rule)
+        self.assertIn('timeout 2999ms', rule)
+        # Reconciliation uses the original deadline, not a fresh three seconds.
+        with patch('native.time.time_ns', return_value=1001000000000), patch('native.ns') as ns:
+            topology.authorize(3000, deadline_ms=1002999)
+        self.assertIn('meta time < 1002', ns.call_args.kwargs['data'])
+        self.assertIn('timeout 1999ms', ns.call_args.kwargs['data'])
+        # A new supervisor object cannot replay the already-expired record.
+        topology = Topology(Path('/unused-after-restart'))
+        with patch('native.time.time_ns', return_value=1003000000000), patch('native.ns') as ns:
+            topology.authorize(3000, deadline_ms=1002999)
+        self.assertNotIn('add element', ns.call_args.kwargs['data'])
+        self.assertNotIn('meta time <', ns.call_args.kwargs['data'])
+
     def test_firewall_counters_do_not_duplicate_or_relax_verdicts(self):
         from native import firewall
         with patch('native.ns') as ns:
