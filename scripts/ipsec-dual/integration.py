@@ -197,6 +197,42 @@ def readiness_extension(topology, evidence):
         # Kernel SAs can survive SIGKILL. Do not reauthorize for the crash probe.
         run_fault(topology, evidence, role + '-charon-crash', crash,
                   topology.recover_ipsec, failure_expected=None)
+    def unrevoked_sa_window():
+        # Negative control: reproduce the surviving-kernel-SA window. No
+        # supervisor revocation is run until the timed set denies the flow.
+        topology.authorize(3000)
+        check('pre-crash application baseline', probe())
+        before_kill_ns = time.monotonic_ns()
+        child = topology.daemon_roles['o']
+        child.kill()
+        child.wait(timeout=2)
+        reaped_ns = time.monotonic_ns()
+        check('gateway daemon reaped', child.poll() is not None)
+        observations = []
+        until = time.monotonic() + 6
+        while time.monotonic() < until:
+            started_ns = time.monotonic_ns()
+            permitted = probe()
+            ended_ns = time.monotonic_ns()
+            observations.append((started_ns, ended_ns, permitted))
+            if not permitted:
+                break
+            time.sleep(0.05)
+        check('surviving SA forwards after daemon exit', any(row[2] for row in observations))
+        check('unrenewed lease eventually denies', bool(observations) and not observations[-1][2])
+        last = next((row for row in reversed(observations) if row[2]), None)
+        denied = observations[-1]
+        (evidence / 'surviving-sa-window.txt').write_text(
+            'clock=CLOCK_MONOTONIC ns; death bracket (signal, reaped); '
+            'probe bracket (start, end, delivered)\n'
+            + f'death {before_kill_ns} {reaped_ns}\n'
+            + ''.join(f'probe {start} {end} {int(ok)}\n' for start, end, ok in observations)
+            + f'last_delivered_end {last[1] if last else "none"}\n'
+            + f'first_denied_bracket {denied[0]} {denied[1]}\n')
+        check('denial remains after expiry', not probe())
+    run_fault(topology, evidence, 'unrevoked-charon-death', unrevoked_sa_window,
+              topology.recover_ipsec, failure_expected=None)
+
     def revoke_race():
         # Bounded serialized policy transition with traffic in flight; no refresh worker.
         topology.authorize(3000)

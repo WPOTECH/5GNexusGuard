@@ -12,8 +12,11 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.io.FileWriter;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -58,6 +61,10 @@ public class TunnelManager {
 
     @ConfigProperty(name = "mesh.data-dir")
     String dataDir;
+
+    // Optional confined WireGuard config location; default preserves existing storage.
+    @ConfigProperty(name = "mesh.tunnel.config-dir")
+    Optional<String> configDirOverride;
 
     @Inject
     com.defenderlink.mesh.tunnel.nativeaccess.AccessMode accessMode;
@@ -154,9 +161,7 @@ public class TunnelManager {
         exec("ip", "addr", "add", localIp, "dev", ifName);
         exec("ip", "link", "set", "mtu", String.valueOf(mtu), "dev", ifName);
         exec("ip", "link", "set", "up", "dev", ifName);
-        exec("wg", "setconf", ifName, configPath);
-        new java.io.File(configPath).setReadable(false, false);
-        new java.io.File(configPath).setReadable(true, true);
+        exec("/usr/bin/wg", "setconf", ifName, configPath);
 
         // Track the tunnel
         ActiveTunnel at = new ActiveTunnel(serviceId, ifName, localIp,
@@ -178,7 +183,7 @@ public class TunnelManager {
      * Tear down a specific service tunnel.
      */
     public void destroyTunnel(String serviceId) {
-        ActiveTunnel tunnel = tunnels.remove(serviceId);
+        ActiveTunnel tunnel = tunnels.remove("conn:" + serviceId);
         if (tunnel == null) return;
 
         try {
@@ -242,9 +247,7 @@ public class TunnelManager {
         exec("ip", "addr", "add", ownerTunnelIp, "dev", ifName);
         exec("ip", "link", "set", "mtu", String.valueOf(mtu), "dev", ifName);
         exec("ip", "link", "set", "up", "dev", ifName);
-        exec("wg", "setconf", ifName, configPath);
-        new java.io.File(configPath).setReadable(false, false);
-        new java.io.File(configPath).setReadable(true, true);
+        exec("/usr/bin/wg", "setconf", ifName, configPath);
 
         // Look up what service port to forward to
         LedgerStore.ServiceRecord svc = ledger.getService(serviceId)
@@ -358,9 +361,53 @@ public class TunnelManager {
     private String writeConfig(String ifName, String privKey, int listenPort,
                                 String peerPubKey, String endpoint,
                                 String allowedIp) throws Exception {
-        String configDir = dataDir + "/wg-configs";
-        new File(configDir).mkdirs();
-        String path = configDir + "/" + ifName + ".conf";
+        String configured = configDirOverride.orElse(dataDir + "/wg-configs");
+        Path directory = Path.of(configured);
+        if (!directory.isAbsolute() || !ifName.matches("[A-Za-z0-9_-]{1,15}"))
+            throw new IllegalArgumentException("Invalid WireGuard config path or interface");
+        directory = directory.normalize();
+        // A directory beneath a replaceable ancestor cannot be trusted after
+        // validation. A sticky root-owned /tmp is safe against another UID
+        // replacing our owned child; an ordinary world-writable parent is not.
+        Path ancestor = directory.getRoot();
+        long fsUid = -1;
+        for (String line : Files.readAllLines(Path.of("/proc/self/status"))) {
+            if (line.startsWith("Uid:")) {
+                String[] ids = line.trim().split("\\s+");
+                if (ids.length == 5) fsUid = Long.parseLong(ids[4]);
+                break;
+            }
+        }
+        if (fsUid < 0) throw new IllegalStateException("Cannot establish process file-system UID");
+        for (Path component : directory) {
+            if (Files.exists(ancestor, LinkOption.NOFOLLOW_LINKS)) {
+                if (!Files.isDirectory(ancestor, LinkOption.NOFOLLOW_LINKS))
+                    throw new IllegalStateException("WireGuard config ancestor is not a real directory");
+                var permissions = Files.getPosixFilePermissions(ancestor, LinkOption.NOFOLLOW_LINKS);
+                boolean sharedWrite = permissions.contains(java.nio.file.attribute.PosixFilePermission.GROUP_WRITE)
+                        || permissions.contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE);
+                int mode = (int) Files.getAttribute(ancestor, "unix:mode", LinkOption.NOFOLLOW_LINKS);
+                long ownerUid = ((Number) Files.getAttribute(ancestor, "unix:uid", LinkOption.NOFOLLOW_LINKS)).longValue();
+                if ((ownerUid != 0 && ownerUid != fsUid)
+                        || (sharedWrite && ((mode & 01000) == 0 || ownerUid != 0)))
+                    throw new IllegalStateException("WireGuard config ancestor is replaceable");
+            }
+            ancestor = ancestor.resolve(component);
+        }
+        Files.createDirectories(directory,
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        if (!directory.toRealPath().equals(directory)
+                || ((Number) Files.getAttribute(directory, "unix:uid", LinkOption.NOFOLLOW_LINKS)).longValue() != fsUid)
+            throw new IllegalStateException("WireGuard config directory must be real and owned by this process");
+        // Legacy default directories were made by mkdirs() under the caller's
+        // umask (often 0755). Tighten only an owned default directory before
+        // writing; explicit confined overrides must already be provisioned.
+        if (configDirOverride.isEmpty())
+            Files.setPosixFilePermissions(directory,
+                    PosixFilePermissions.fromString("rwx------"));
+        if (!Files.getPosixFilePermissions(directory).equals(PosixFilePermissions.fromString("rwx------")))
+            throw new IllegalStateException("WireGuard config directory must be private");
+        Path path = directory.resolve(ifName + ".conf");
 
         String config = "[Interface]\nPrivateKey = " + privKey +
                 "\nListenPort = " + listenPort +
@@ -369,19 +416,31 @@ public class TunnelManager {
                 "\nAllowedIPs = " + allowedIp + "/32" +
                 "\nPersistentKeepalive = " + keepalive + "\n";
 
-        try (FileWriter w = new FileWriter(path)) { w.write(config); }
-
-        File f = new File(path);
-        f.setReadable(false, false);
-        f.setReadable(true, true);
-        return path;
+        Path temporary = Files.createTempFile(directory, ".wg-", ".tmp",
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+        try {
+            if (!Files.getOwner(directory, LinkOption.NOFOLLOW_LINKS)
+                    .equals(Files.getOwner(temporary, LinkOption.NOFOLLOW_LINKS)))
+                throw new IllegalStateException("WireGuard config directory must belong to this process");
+            // Reopening with NOFOLLOW prevents an exchanged temporary symlink
+            // from redirecting the private key to a different file.
+            try (var output = Files.newOutputStream(temporary,
+                    java.nio.file.StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+                output.write(config.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+        return path.toString();
     }
 
     private String[] generateWgKeyPair() throws Exception {
         // Use wg genkey/pubkey if available, otherwise BouncyCastle X25519
         try {
-            String privKey = execCapture("wg", "genkey").trim();
-            String pubKey = execCapture("sh", "-c", "echo " + privKey + " | wg pubkey").trim();
+            String privKey = execCapture("/usr/bin/wg", "genkey").trim();
+            String pubKey = execCaptureWithInput(privKey + "\n", "/usr/bin/wg", "pubkey").trim();
             return new String[]{privKey, pubKey};
         } catch (Exception e) {
             // Fallback: BouncyCastle X25519 (same as KeyManager in v1)
@@ -407,7 +466,19 @@ public class TunnelManager {
 
     private String execCapture(String... cmd) throws Exception {
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-        return new String(p.getInputStream().readAllBytes());
+        String output = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        if (p.waitFor() != 0) throw new IllegalStateException("WireGuard key command failed");
+        return output;
+    }
+
+    private String execCaptureWithInput(String input, String... cmd) throws Exception {
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        try (var stream = p.getOutputStream()) {
+            stream.write(input.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        }
+        String output = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        if (p.waitFor() != 0) throw new IllegalStateException("WireGuard key command failed");
+        return output;
     }
 
     // =========================================================================

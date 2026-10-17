@@ -45,8 +45,8 @@ public class LedgerStore {
     @ConfigProperty(name = "mesh.ledger.data-dir")
     String ledgerDataDir;
 
-    @ConfigProperty(name = "mesh.license.key", defaultValue = "")
-    String licenseKey;
+    @ConfigProperty(name = "mesh.license.key")
+    Optional<String> licenseKey;
 
     @ConfigProperty(name = "mesh.node.max-free", defaultValue = "3")
     int maxFreeNodes;
@@ -238,9 +238,10 @@ public class LedgerStore {
     }
 
     private void validateNodeLimit() {
-        boolean isFree       = licenseKey == null || licenseKey.isBlank();
-        boolean isPro        = !isFree && licenseKey.startsWith("dl_pro_");
-        boolean isEnterprise = !isFree && licenseKey.startsWith("dl_ent_");
+        String key = licenseKey == null ? "" : licenseKey.orElse("");
+        boolean isFree       = key.isBlank();
+        boolean isPro        = !isFree && key.startsWith("dl_pro_");
+        boolean isEnterprise = !isFree && key.startsWith("dl_ent_");
 
         if (isEnterprise) return; // unlimited
 

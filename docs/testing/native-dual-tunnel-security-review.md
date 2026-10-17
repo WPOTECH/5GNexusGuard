@@ -156,27 +156,41 @@ clock-shift packet run.
 A crashed charon can leave kernel XFRM SAs/policies installed and an already-granted
 firewall element active. `recover_ipsec()` revokes first when invoked, but a stalled
 or crashed supervisor cannot run it. The current crash harness calls revoke before
-its denial probe, so it does not measure death-to-denial exposure. The installed
-three-second relative element is an independent finite gate only if it is not
-renewed from stale health. There is no separate kernel-enforced health deadline,
-heartbeat freshness test, or measured maximum crash exposure. **HIGH surviving-SA
+its denial probe, so it does not measure death-to-denial exposure. The existing
+3-second relative element is a finite grace period, not a separate health
+authority: a missed supervisor heartbeat leaves forwarding
+until the element expires, and a stale sequential SA observation can refresh it.
+The pre-revoke crash fixture does not measure that exposure. A subsequent
+isolated negative-control run (`ipsec-dual-p0-sa-window-1`, exit 0, 1060 PASS,
+0 FAIL) deliberately omitted the pre-revocation and continued probing while
+charon was dead. It observed delivered application probes through 2.247 s after
+the daemon was reaped; the first denied probe started 2.300 s after SIGKILL and
+finished 3.368 s after SIGKILL (the denial probe itself timed out). These are
+probe brackets, **not** an exact first-denied-packet timestamp or a universal
+worst-case bound. The private artifact is
+`/home/wpotech/.hermes/cache/scratch/ipsec-dual-p0-sa-window-1/faults/surviving-sa-window.txt`.
+This confirms continued forwarding under a surviving SA while the already
+installed lease remains active. No kernel-enforced independent health deadline,
+heartbeat freshness test, or corrected packet run exists. **HIGH surviving-SA
 finding remains open.** Independent Codex reproduced a daemon exiting during
 sequential SA queries while `ipsec_ready()` still returned true; a ten-second
-command timeout permits slow stale-health use. This is a mocked interleaving, not
-a packet-level death-to-denial bound. Do not globally flush XFRM; teardown of
-owned kernel states must be exact and must preserve unrelated connections.
+command timeout permits slow stale-health use. Do not globally flush XFRM;
+teardown of owned kernel states must be exact and must preserve unrelated
+connections.
 
-STANDARD's direct `/usr/bin/wg setconf` fails on `openat` of its config with EACCES;
-even a world-readable dummy config in the same isolated container fails. A copy of
-the same executable in the container succeeds, and the two-product-JVM application
-traffic smoke passes through that temporary harness-only executable path. The
-original binary's execution-time security identity/denial policy has not been
-established, so this is not a production permission fix. An earlier independent
-review additionally classified STANDARD interface/config naming collisions as
-HIGH, connector teardown map-key mismatch as HIGH, and initial secret-file mode
-handling as MEDIUM. These are not corrections in this P0 delta. The new read-only
-Codex review of the native P0 delta established two remaining HIGH findings and
-no new CRITICAL finding; its full output is kept privately under
+STANDARD's direct `/usr/bin/wg setconf` failed on `openat` of its config
+with EACCES. The host audit log attributed it to AppArmor `profile="wg"`,
+which permits `/etc/wireguard/{,**}` but not the original config directory.
+The product now optionally accepts `mesh.tunnel.config-dir` for a protected
+AppArmor-allowed path while leaving ledger/identity data in its existing place.
+The original `/usr/bin/wg` (not a copied path) passed an isolated two-JVM traffic
+smoke under the configured AppArmor-allowed directory without host-policy changes.
+This does not repair independent STANDARD ownership and teardown defects. The
+`conn:` map-key mismatch and write-then-chmod key exposure have local corrections
+and tests, but path/race resistance is not fully validated; owner-side teardown,
+interface/config naming collisions, and installed config cleanup remain open.
+Do not classify STANDARD as security-accepted. Earlier independent native reviews
+confirmed two remaining HIGH findings. Their output is kept privately under
 `/home/wpotech/.hermes/cache/scratch/p0-independent-review.log`.
 
 ## Unprivileged validation executed

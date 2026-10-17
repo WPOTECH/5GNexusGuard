@@ -97,6 +97,19 @@ start the Java product. Operator packaging and an end-to-end product lease test
 remain pending; Java mode alone cannot create a tunnel. `EXTERNAL_CONFIG` suppresses
 lease export while retaining STANDARD guards, so it cannot imply local enforcement.
 
+For STANDARD under an AppArmor profile that attaches to `/usr/bin/wg` and only
+allows reads from `/etc/wireguard/{,**}`, configure the optional
+`MESH_TUNNEL_CONFIG_DIR=/etc/wireguard/defenderlink` and provision that directory
+as real, mode-0700, owned by the JVM's effective user. The JVM must be able to
+write it and the actual `/usr/bin/wg` must be able to read it. Identity and ledger
+stay in `mesh.data-dir`; without this override the existing `wg-configs` path is
+preserved and an owned legacy default directory is tightened to 0700 before new
+keys are written. A distinct service UID needs the leaf provisioned in advance
+with traversal permission through `/etc/wireguard`, but no shared-writable
+ancestor. Do not globally disable AppArmor, widen private-key modes, or copy the
+`wg` executable to evade its profile. Test the exact deployed profile and path;
+other hosts can have different policy.
+
 Normal failures clean up owned namespaces and processes. Container deletion is the
 final cleanup boundary. An interrupted standalone supervisor can leave namespace
 state: it refuses to adopt existing names, rather than deleting unknown state.
