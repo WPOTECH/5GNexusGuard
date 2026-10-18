@@ -13,6 +13,13 @@ import sys
 import time
 
 NAMES = {r: 'dlip-' + r for r in 'eoir'}
+_control = None
+
+
+def control_step():
+    if _control is not None:
+        return _control.step()
+    return 'DENIED'
 
 
 def command(*args, data=None):
@@ -359,7 +366,12 @@ def renew_authorization(topology, args, ready):
     # Until an authenticated current-epoch issuance verifier is wired here,
     # operator mode remains fail-closed even if a tunnel/SA is established.
     if topology.credentials is not None:
-        topology.authorize(0)
+        try:
+            control_step()
+        except Exception:
+            pass  # Telemetry cannot change the packet gate.
+        finally:
+            topology.authorize(0)
         return
     # Read AFTER slow health checks; never reuse a duration sampled before them.
     milliseconds = 0
@@ -395,6 +407,7 @@ def main():
     parser.add_argument('--ledger-uid', type=int, required=True)
     parser.add_argument('--lease', type=Path, default=Path('/run/defenderlink-native/lease.json'))
     parser.add_argument('--state', type=Path, default=Path('/tmp/defenderlink-ipsec-network'))
+    parser.add_argument('--aa-config', type=Path, help='explicit private V2 control-plane JSON; omitted by default')
     args = parser.parse_args()
     require_container()
     if os.geteuid() != 0:
@@ -411,6 +424,23 @@ def main():
     fd = os.open(args.state / 'lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     topology = Topology(args.state, args.credentials)
+    if args.aa_config is not None:
+        from native_control_v2 import Controller, private_read, private_directory
+        from cryptography.hazmat.primitives import serialization
+        config_path = args.aa_config
+        private_directory(config_path.parent)
+        config = json.loads(private_read(config_path))
+        if set(config) != {'directory', 'operatorKey', 'nodeKey', 'supervisorKey', 'aaKey', 'url', 'ca', 'cert', 'tlsKey', 'resource'}:
+            parser.error('invalid explicit AA configuration')
+        def pin(name):
+            return bytes.fromhex(config[name])
+        signer = serialization.load_pem_private_key(private_read(Path(config['supervisorKey'])), password=None)
+        if not hasattr(signer, 'sign'):
+            parser.error('invalid supervisor signer')
+        global _control
+        _control = Controller(config['directory'], dict(serviceId=args.service, clientNodeId=args.client,
+            ownerNodeId=args.owner, resource=config['resource']), pin('operatorKey'), pin('nodeKey'),
+            signer, config['url'], config['ca'], config['cert'], config['tlsKey'], pin('aaKey'))
     def stop(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop)

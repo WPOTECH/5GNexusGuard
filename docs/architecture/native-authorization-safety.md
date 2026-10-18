@@ -56,11 +56,12 @@ must be durably committed before an attestation is acknowledged. The existing
 separately pinned Ed25519 operator approval remains necessary for grants and
 recovery; the node key only countersigns transport. Node↔AA requests must use
 mutually authenticated TLS with separately provisioned certificates, and a
-fresh challenge-bound, AA-signed response. An opt-in isolated implementation
-and ephemeral-PKI tests are in `scripts/ipsec-dual/authorization_aa_v2.py` and
-`AUTHORIZATION_AA_V2.md`; it is not wired to the deployed native supervisor or
-Java exporter, and cannot yet grant production traffic. No commercial service,
-TPM, production URL or PKI is assumed. An ordinary local or AA-host database
+fresh challenge-bound, AA-signed response. An opt-in AA implementation and
+ephemeral-PKI tests are in `scripts/ipsec-dual/authorization_aa_v2.py` and
+`AUTHORIZATION_AA_V2.md`. The native operator now has an explicitly configured
+supervisor-to-AA control plane and isolated Java/AA/supervisor test, but still
+calls the packet gate with DENY on every loop. No commercial service, TPM,
+production URL or PKI is assumed. An ordinary local or AA-host database
 cannot prove it has not been wholly restored to an older valid snapshot;
 production rollback resistance stays BLOCKED until independent storage
 protection and recovery are validated. No scheduled exporter refresh,
@@ -99,6 +100,12 @@ without an independent monotonic anchor; after any restart, no persisted grant
 is reactivated, and a fresh signed operator RECOVER plus a separate signed
 allow is required. This safe denial does **not** establish durable rollback
 resistance or a production-ready operator channel.
+
+## Opt-in AA supervisor control plane (no packet admission)
+
+With explicit private configuration, `native.py` constructs `native_control_v2.Controller` using the kernel boot UUID and `CLOCK_BOOTTIME`, a fresh supervisor session, operator/node/supervisor pins and a separate AA response pin. It reads signed operations and Java V2 envelopes from a private atomic spool, journals admission decisions, and uses hostname-checked node mTLS to request a newly challenged AA-signed attestation. The AA scope is a domain-separated digest of the complete service/client/owner/resource tuple, not a service-only label. It persists observed AA generation/revocation/epoch floors before reporting informational `ATTESTED`; restart begins denied, with new signed operator recovery and approval required. These local files do not prove whole-history rollback resistance.
+
+`NativeControlAaIntegrationTest` invokes the real Java `NativePolicyExporter.issueApproved` through a private JSON-lines fixture with ephemeral keys, a running loopback AA HTTPS server, and the actual operator-mode `native.renew_authorization` decision. It tests signed recovery, grant, expiry, forced AA re-attestation after revocation, local revocation, restart, renewed approval and AA unavailability. The resulting control-plane decision never changes the unconditional `topology.authorize(0)` packet denial. This is an isolated JUnit process and Python supervisor module, not a deployed product JVM/ledger-to-native channel or independently administered AA host. Revocation is visible on the next attestation, not instantaneously after an already delivered response. Production packet admission remains disabled; see `scripts/ipsec-dual/NATIVE-AA-CONTROL-V2.md` for trust and recovery details.
 
 ## Kernel gate and evidence required before closure
 

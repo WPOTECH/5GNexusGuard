@@ -331,6 +331,7 @@ class AttestationVerifier:
         self.pending = None
         self.seen = set()
         self.lock = threading.RLock()
+        self.accepted_expires_at_ms = None
 
     def challenge(self, request):
         with self.lock:
@@ -365,6 +366,7 @@ class AttestationVerifier:
             self.key.verify(signature, message)
             self.seen.add(p['issuanceId'])
             self.pending = None
+            self.accepted_expires_at_ms = p['expiresAtMs']
             self.generation_floor = p['generation']
             self.revocation_floor = p['revocation']
             self.epoch_floor = p['epoch']
