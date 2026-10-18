@@ -56,12 +56,16 @@ must be durably committed before an attestation is acknowledged. The existing
 separately pinned Ed25519 operator approval remains necessary for grants and
 recovery; the node key only countersigns transport. Node↔AA requests must use
 mutually authenticated TLS with separately provisioned certificates, and a
-fresh challenge-bound, AA-signed response. No commercial service, TPM, production
-URL or PKI is assumed. An ordinary local or AA-host database cannot prove it
-has not been wholly restored to an older valid snapshot; production rollback
-resistance stays BLOCKED until independent storage protection and recovery are
-validated. No scheduled exporter refresh, unauthenticated HTTP request,
-reconstructed ledger state or local root-owned file can act as approval.
+fresh challenge-bound, AA-signed response. An opt-in isolated implementation
+and ephemeral-PKI tests are in `scripts/ipsec-dual/authorization_aa_v2.py` and
+`AUTHORIZATION_AA_V2.md`; it is not wired to the deployed native supervisor or
+Java exporter, and cannot yet grant production traffic. No commercial service,
+TPM, production URL or PKI is assumed. An ordinary local or AA-host database
+cannot prove it has not been wholly restored to an older valid snapshot;
+production rollback resistance stays BLOCKED until independent storage
+protection and recovery are validated. No scheduled exporter refresh,
+unauthenticated HTTP request, reconstructed ledger state or local root-owned
+file can act as approval.
 
 A functioning deployed V2 protocol therefore requires a verifiable
 fresh issuance authority, not just new JSON fields. The issuer must sign the
