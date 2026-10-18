@@ -214,6 +214,19 @@ class RecoveryTests(unittest.TestCase):
         with patch('native.ns', side_effect=RuntimeError):
             self.assertFalse(topology.reconcile_routes())
 
+    def test_operator_mode_cannot_admit_legacy_unsigned_lease(self):
+        from native import Topology, renew_authorization
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        topology = Topology(Path('/unused'), credentials=Path('/operator-credentials'))
+        topology.authorize = Mock()
+        args = SimpleNamespace(lease=Path('/unused/lease.json'), ledger_uid=1,
+                               service='svc', client='client', owner='owner')
+        with patch('native.read_lease') as read:
+            renew_authorization(topology, args, True)
+        read.assert_not_called()
+        topology.authorize.assert_called_once_with(0)
+
     def test_authorization_samples_time_after_read_and_denies_unready(self):
         from native import renew_authorization
         from types import SimpleNamespace
@@ -222,6 +235,7 @@ class RecoveryTests(unittest.TestCase):
         lease = dict(version=2, transport='IKEV2_ESP_WIREGUARD', allowed=True, serviceId='svc',
                      clientNodeId='client', ownerNodeId='owner', expiresAtMs=2000)
         topology = Mock()
+        topology.credentials = None
         events = []
         with patch('native.read_lease', side_effect=lambda *a: events.append('read') or lease) as read, \
              patch('native.time.time_ns', side_effect=lambda: events.append('time') or 2100000000):

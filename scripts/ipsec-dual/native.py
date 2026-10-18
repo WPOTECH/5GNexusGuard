@@ -354,6 +354,13 @@ class Topology:
 
 
 def renew_authorization(topology, args, ready):
+    # The operator deployment must never promote unsigned, rolling wire-v2
+    # exports into authorization. The synthetic packet lab remains separate.
+    # Until an authenticated current-epoch issuance verifier is wired here,
+    # operator mode remains fail-closed even if a tunnel/SA is established.
+    if topology.credentials is not None:
+        topology.authorize(0)
+        return
     # Read AFTER slow health checks; never reuse a duration sampled before them.
     milliseconds = 0
     deadline_ms = None
@@ -410,7 +417,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     try:
         topology.create()
-        print('Native namespaces ready; access requires a current ledger lease.', flush=True)
+        print('Native namespaces ready; protected access denied pending authenticated current-epoch issuance.', flush=True)
         last_retry = 0.0
         while True:
             routes_ready = topology.reconcile_routes()

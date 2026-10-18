@@ -30,12 +30,18 @@ DUAL_TUNNEL must not be advertised as a validated security boundary.
 
 ## Current authority gap
 
-`NativePolicyExporter` currently writes an atomic version-2 record containing
+`NativePolicyExporter` still writes an atomic version-2 record containing
 identities, an `allowed` bit and a rolling `expiresAtMs` derived from `Instant.now()`
-(`NativePolicyExporter.java:40–67`). The supervisor computes remaining time with
-the current wall clock and installs a relative nft set element and `meta time`
-rule (`native.py:41–52,306–321,356–372`). The owner identity and file mode
-identify a local writer, not the freshness of the underlying ledger operation.
+(`NativePolicyExporter.java:40–67`). The legacy synthetic packet lab computes
+remaining time with the current wall clock and installs a relative nft set element
+and `meta time` rule. The actual operator-mode supervisor now **denies every
+legacy export**, regardless of SA/route readiness (`native.py:renew_authorization`);
+this is a deliberate availability loss, not a functioning V2 protocol. A
+legacy signed/unsigned file cannot be enabled as a deployment workaround.
+`NodeIdentity` now creates private real key files and rejects mismatched keys;
+this secures local key handling but does not authorize callers to use the key.
+The owner identity and file mode identify a local writer, not the freshness of
+the underlying ledger operation.
 `LedgerStore` reconstructs service state on restart; its materialized service
 record does not retain the authorizing block generation. It accepts signed
 blocks but does not authorize each ServiceUpdate or ServiceRevoke as an operation
@@ -46,9 +52,19 @@ when the wall clock moves backward. Sampling BOOTTIME after receiving it cannot
 recover the missing provenance. An in-memory high-water mark disappears on
 restart; a persisted BOOTTIME value is not meaningful across boots.
 
+The selected authority for V2 is an explicit post-boot operator approval signed
+by a **separately pinned Ed25519 operator key**. The node's existing key may
+countersign transport, but cannot substitute for operator authorization. No
+scheduled exporter refresh, unauthenticated HTTP request, reconstructed ledger
+state, or local root-owned file can produce this approval. The operator's public
+key must be provisioned out-of-band and pinned; replacement, compromise and
+revocation require an explicit operator procedure. The native receiver must
+challenge each supervisor session and reject approvals from a previous session
+or boot. This decision is a design input, **not an implemented V2 grant**.
+
 A functioning version-3 protocol therefore requires an identified, verifiable
 fresh issuance authority, not just new JSON fields. The issuer must sign the
-complete authorization tuple, a ledger-authorized policy generation, original
+complete authorization tuple, an operator-approved policy generation, original
 lifetime, and a receiver-challenged boot/session binding. The receiver must
 verify the signature, the issuer's right to authorize that resource, the
 current session, durable generation/revocation high-water state, and a trusted

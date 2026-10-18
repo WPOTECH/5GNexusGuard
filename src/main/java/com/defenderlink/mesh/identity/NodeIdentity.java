@@ -16,7 +16,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Set;
 import java.security.SecureRandom;
 import java.security.Security;
 import java.util.Base64;
@@ -58,18 +62,49 @@ public class NodeIdentity {
     @PostConstruct
     void init() {
         try {
-            Path keyDir = Path.of(dataDir, "identity");
-            Files.createDirectories(keyDir);
+            Path keyDir = Path.of(dataDir, "identity").toAbsolutePath().normalize();
+            Files.createDirectories(keyDir,
+                    PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+            long fsUid = -1;
+            for (String line : Files.readAllLines(Path.of("/proc/self/status"))) {
+                if (line.startsWith("Uid:")) {
+                    String[] ids = line.trim().split("\\s+");
+                    if (ids.length == 5) fsUid = Long.parseLong(ids[4]);
+                    break;
+                }
+            }
+            if (fsUid < 0) throw new IOException("Unable to establish filesystem UID");
+            // Every ancestor must resist replacement by another UID. A root-owned
+            // sticky directory (e.g. /tmp in isolated tests) protects owned entries.
+            for (Path parent = keyDir.getParent(); parent != null; parent = parent.getParent()) {
+                if (!Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)
+                        || !parent.toRealPath().equals(parent))
+                    throw new IOException("Identity ancestor is not a real directory");
+                long owner = ((Number) Files.getAttribute(parent, "unix:uid", LinkOption.NOFOLLOW_LINKS)).longValue();
+                int mode = ((Number) Files.getAttribute(parent, "unix:mode", LinkOption.NOFOLLOW_LINKS)).intValue();
+                if ((owner != 0 && owner != fsUid)
+                        || ((mode & 0022) != 0 && !(owner == 0 && (mode & 01000) != 0)))
+                    throw new IOException("Identity ancestor is replaceable by another UID");
+            }
+            if (!Files.isDirectory(keyDir, LinkOption.NOFOLLOW_LINKS)
+                    || !keyDir.toRealPath().equals(keyDir)
+                    || ((Number) Files.getAttribute(keyDir, "unix:uid", LinkOption.NOFOLLOW_LINKS)).longValue() != fsUid)
+                throw new IOException("Identity directory is not a real owned directory");
+            Files.setPosixFilePermissions(keyDir, PosixFilePermissions.fromString("rwx------"));
 
             Path privPath = keyDir.resolve(PRIV_KEY_FILE);
             Path pubPath = keyDir.resolve(PUB_KEY_FILE);
 
-            if (Files.exists(privPath) && Files.exists(pubPath)) {
+            boolean privExists = Files.exists(privPath, LinkOption.NOFOLLOW_LINKS);
+            boolean pubExists = Files.exists(pubPath, LinkOption.NOFOLLOW_LINKS);
+            if (privExists && pubExists) {
                 loadKeys(privPath, pubPath);
                 log.info("Loaded existing node identity: {}", shortId());
-            } else {
+            } else if (!privExists && !pubExists) {
                 generateKeys(privPath, pubPath);
                 log.info("Generated new node identity: {}", shortId());
+            } else {
+                throw new IOException("Incomplete node identity; refusing key replacement");
             }
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize node identity", e);
@@ -141,23 +176,49 @@ public class NodeIdentity {
         publicKey = (Ed25519PublicKeyParameters) keyPair.getPublic();
         nodeId = HexFormat.of().formatHex(publicKey.getEncoded());
 
-        // Save keys (private key file permissions should be 600 in production)
-        Files.write(privPath, privateKey.getEncoded());
-        Files.write(pubPath, publicKey.getEncoded());
-
-        // Restrict private key permissions
-        privPath.toFile().setReadable(false, false);
-        privPath.toFile().setReadable(true, true);
-        privPath.toFile().setWritable(false, false);
-        privPath.toFile().setWritable(true, true);
+        byte[] privateBytes = privateKey.getEncoded();
+        try (var channel = Files.newByteChannel(privPath,
+                Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))) {
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(privateBytes);
+            while (buffer.hasRemaining()) channel.write(buffer);
+        } finally {
+            java.util.Arrays.fill(privateBytes, (byte) 0);
+        }
+        try (var channel = Files.newByteChannel(pubPath,
+                Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))) {
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(publicKey.getEncoded());
+            while (buffer.hasRemaining()) channel.write(buffer);
+        }
     }
 
     private void loadKeys(Path privPath, Path pubPath) throws IOException {
-        byte[] privBytes = Files.readAllBytes(privPath);
-        byte[] pubBytes = Files.readAllBytes(pubPath);
-
-        privateKey = new Ed25519PrivateKeyParameters(privBytes, 0);
-        publicKey = new Ed25519PublicKeyParameters(pubBytes, 0);
-        nodeId = HexFormat.of().formatHex(publicKey.getEncoded());
+        if (!Files.isRegularFile(privPath, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isRegularFile(pubPath, LinkOption.NOFOLLOW_LINKS)
+                || !Files.getPosixFilePermissions(privPath, LinkOption.NOFOLLOW_LINKS)
+                         .equals(PosixFilePermissions.fromString("rw-------")))
+            throw new IOException("Identity key files must be real and private");
+        byte[] privBytes;
+        byte[] pubBytes;
+        try (var input = java.nio.channels.Channels.newInputStream(Files.newByteChannel(privPath,
+                Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)))) {
+            privBytes = input.readNBytes(33);
+        }
+        try (var input = java.nio.channels.Channels.newInputStream(Files.newByteChannel(pubPath,
+                Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)))) {
+            pubBytes = input.readNBytes(33);
+        }
+        if (privBytes.length != 32 || pubBytes.length != 32)
+            throw new IOException("Invalid identity key length");
+        try {
+            privateKey = new Ed25519PrivateKeyParameters(privBytes, 0);
+            if (!java.util.Arrays.equals(privateKey.generatePublicKey().getEncoded(), pubBytes))
+                throw new IOException("Identity public key does not match private key");
+            publicKey = new Ed25519PublicKeyParameters(pubBytes, 0);
+            nodeId = HexFormat.of().formatHex(publicKey.getEncoded());
+        } finally {
+            java.util.Arrays.fill(privBytes, (byte) 0);
+        }
     }
 }
