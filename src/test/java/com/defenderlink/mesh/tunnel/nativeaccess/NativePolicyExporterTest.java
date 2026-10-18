@@ -71,6 +71,18 @@ class NativePolicyExporterTest {
         assertThrows(IllegalStateException.class, mode::gatewayMode);
     }
 
+    @Test void scheduledExportCannotConsultUnverifiedLedger(@TempDir Path directory) throws Exception {
+        Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------"));
+        NativePolicyExporter exporter = new NativePolicyExporter();
+        exporter.mode = new AccessMode(); exporter.mode.mode = "NATIVE_DUAL";
+        exporter.identity = new NodeIdentity() { @Override public String getNodeId() { return "owner"; } };
+        exporter.mapper = new ObjectMapper(); exporter.serviceId = "svc"; exporter.clientId = "client";
+        exporter.leaseFile = directory.resolve("lease.json").toString();
+        // A scheduled export must still write a deny record when ledger authority is unavailable.
+        exporter.refresh();
+        assertFalse(exporter.mapper.readTree(Path.of(exporter.leaseFile).toFile()).get("allowed").asBoolean());
+    }
+
     @Test void exporterUsesLedgerViewAndPublishesRevocation(@TempDir Path directory) throws Exception {
         Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------"));
         var records = new HashMap<String, ServiceRecord>();
@@ -88,7 +100,7 @@ class NativePolicyExporterTest {
         Path target = directory.resolve("lease.json"); exporter.leaseFile = target.toString();
         exporter.refresh();
         var lease = exporter.mapper.readTree(target.toFile());
-        assertTrue(lease.get("allowed").asBoolean());
+        assertFalse(lease.get("allowed").asBoolean()); // unsigned ledger view cannot issue approval
         assertEquals(2, lease.get("version").asInt());
         assertEquals("IKEV2_ESP_WIREGUARD", lease.get("transport").asText());
         assertEquals("client", lease.get("clientNodeId").asText());
@@ -117,7 +129,7 @@ class NativePolicyExporterTest {
             exporter.mapper = new ObjectMapper(); exporter.serviceId = "svc"; exporter.clientId = "client";
             Path target = leases.resolve("lease.json"); exporter.leaseFile = target.toString();
             exporter.refresh();
-            assertTrue(exporter.mapper.readTree(target.toFile()).get("allowed").asBoolean());
+            assertFalse(exporter.mapper.readTree(target.toFile()).get("allowed").asBoolean());
             fixture.store.appendBlock(List.of(new com.defenderlink.mesh.ledger.model.LedgerEntry.ServiceUpdate(
                     owner, "svc", List.of(), ServicePolicy.defaults(), NOW, signature)));
             exporter.refresh();
@@ -125,7 +137,7 @@ class NativePolicyExporterTest {
             fixture.store.appendBlock(List.of(new com.defenderlink.mesh.ledger.model.LedgerEntry.ServiceUpdate(
                     owner, "svc", List.of("client"), ServicePolicy.defaults(), NOW, signature)));
             exporter.refresh();
-            assertTrue(exporter.mapper.readTree(target.toFile()).get("allowed").asBoolean());
+            assertFalse(exporter.mapper.readTree(target.toFile()).get("allowed").asBoolean());
             fixture.store.appendBlock(List.of(new com.defenderlink.mesh.ledger.model.LedgerEntry.ServiceRevoke(
                     owner, "svc", "test", NOW, signature)));
             exporter.refresh();

@@ -44,16 +44,9 @@ public class NativePolicyExporter {
         try {
             String owner = identity.getNodeId();
             Instant now = Instant.now();
-            ServiceRecord service = ledger.getService(serviceId).orElse(null);
-            boolean allowed = allows(service, owner, clientId, now,
-                    ledger.getNode(owner).map(LedgerStore.NodeRecord::active).orElse(false),
-                    ledger.getNode(clientId).map(LedgerStore.NodeRecord::active).orElse(false));
+            // Materialized ledger state is not an authenticated operator approval.
+            // Scheduled exports can only withdraw old permissions, never issue one.
             long until = now.toEpochMilli();
-            if (allowed) {
-                until += 3000;
-                if (service.policy().expiresAt() != null)
-                    until = Math.min(until, service.policy().expiresAt().toEpochMilli());
-            }
             Path target = Path.of(leaseFile).toAbsolutePath().normalize();
             Path directory = target.getParent();
             if (!directory.toRealPath().equals(directory)
@@ -62,7 +55,7 @@ public class NativePolicyExporter {
             temporary = Files.createTempFile(directory, ".lease-", ".tmp",
                     PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
             mapper.writeValue(temporary.toFile(), Map.of("version", 2, "transport", "IKEV2_ESP_WIREGUARD", "serviceId", serviceId,
-                    "clientNodeId", clientId, "ownerNodeId", owner, "allowed", allowed,
+                    "clientNodeId", clientId, "ownerNodeId", owner, "allowed", false,
                     "expiresAtMs", until));
             Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (Exception e) {
