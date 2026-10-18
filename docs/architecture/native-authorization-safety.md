@@ -30,18 +30,15 @@ DUAL_TUNNEL must not be advertised as a validated security boundary.
 
 ## Current authority gap
 
-`NativePolicyExporter` still writes an atomic version-2 record containing
-identities, an `allowed` bit and a rolling `expiresAtMs` derived from `Instant.now()`
-(`NativePolicyExporter.java:40–67`). The legacy synthetic packet lab computes
-remaining time with the current wall clock and installs a relative nft set element
-and `meta time` rule. The actual operator-mode supervisor now **denies every
-legacy export**, regardless of SA/route readiness (`native.py:renew_authorization`);
-this is a deliberate availability loss, not a functioning V2 protocol. A
-legacy signed/unsigned file cannot be enabled as a deployment workaround.
-`NodeIdentity` now creates private real key files and rejects mismatched keys;
-this secures local key handling but does not authorize callers to use the key.
-The owner identity and file mode identify a local writer, not the freshness of
-the underlying ledger operation.
+`NativePolicyExporter.refresh()` now writes an atomic, deny-only version-2
+compatibility record; it does not consult the materialized ledger or issue a
+rolling allow. The legacy synthetic packet lab still computes wall-clock lease
+remaining time and installs a relative nft element plus `meta time` rule. The
+actual operator-mode supervisor **denies every legacy export and standalone V2
+envelope**, regardless of SA/route readiness (`native.py:renew_authorization`);
+this is a deliberate availability loss, not a functioning V2 packet gate.
+`NodeIdentity` creates private real key files and rejects mismatched keys, but
+key custody alone cannot authorize a caller to request a signature.
 `LedgerStore` reconstructs service state on restart; its materialized service
 record does not retain the authorizing block generation. It accepts signed
 blocks but does not authorize each ServiceUpdate or ServiceRevoke as an operation
@@ -52,17 +49,21 @@ when the wall clock moves backward. Sampling BOOTTIME after receiving it cannot
 recover the missing provenance. An in-memory high-water mark disappears on
 restart; a persisted BOOTTIME value is not meaningful across boots.
 
-The selected authority for V2 is an explicit post-boot operator approval signed
-by a **separately pinned Ed25519 operator key**. The node's existing key may
-countersign transport, but cannot substitute for operator authorization. No
-scheduled exporter refresh, unauthenticated HTTP request, reconstructed ledger
-state, or local root-owned file can produce this approval. The operator's public
-key must be provisioned out-of-band and pinned; replacement, compromise and
-revocation require an explicit operator procedure. The native receiver must
-challenge each supervisor session and reject approvals from a previous session
-or boot. This decision is a design input, **not an implemented V2 grant**.
+The selected authority for V2 is a separately administered native 5GNexusGuard
+Authorization Authority (AA), distinct from the endpoint and supervisor. Its
+per-(node,scope) generation, revocation and enforcement-epoch high-water state
+must be durably committed before an attestation is acknowledged. The existing
+separately pinned Ed25519 operator approval remains necessary for grants and
+recovery; the node key only countersigns transport. Node↔AA requests must use
+mutually authenticated TLS with separately provisioned certificates, and a
+fresh challenge-bound, AA-signed response. No commercial service, TPM, production
+URL or PKI is assumed. An ordinary local or AA-host database cannot prove it
+has not been wholly restored to an older valid snapshot; production rollback
+resistance stays BLOCKED until independent storage protection and recovery are
+validated. No scheduled exporter refresh, unauthenticated HTTP request,
+reconstructed ledger state or local root-owned file can act as approval.
 
-A functioning version-3 protocol therefore requires an identified, verifiable
+A functioning deployed V2 protocol therefore requires a verifiable
 fresh issuance authority, not just new JSON fields. The issuer must sign the
 complete authorization tuple, an operator-approved policy generation, original
 lifetime, and a receiver-challenged boot/session binding. The receiver must
@@ -76,6 +77,24 @@ An automatically re-signed old service record is **not** that event. If policy
 has a wall-clock expiry, the issuer needs trustworthy time at initial issuance;
 otherwise it must issue an independently bounded relative lifetime from a
 freshly authenticated event. Without that authority, deny rather than guessing.
+
+## Disconnected V2 admission slice
+
+`NativePolicyExporter.issueApproved` verifies a separately pinned operator
+signature and a supervisor-signed challenge before node countersigning; it is
+an explicit static library call, not a wired product endpoint. The Python
+`admission_v2.py` library supports DENIED → PENDING_FRESH_APPROVAL → AUTHORIZED
+→ EXPIRED/REVOKED with signed RECOVER and REVOKE operations, a private fsynced
+journal, boot/session/nonce/scope checks and restart quarantine. The Java test
+hands a real exporter-issued envelope to Python admission with ephemeral keys;
+this proves the isolated signature/state transition, not a deployed operator
+or data-plane authorization. Its caller still supplies boot ID, BOOTTIME and
+key custody. See `scripts/ipsec-dual/ADMISSION_V2.md` for the exact format,
+recovery rules and tests. A whole-file journal rollback is not detectable
+without an independent monotonic anchor; after any restart, no persisted grant
+is reactivated, and a fresh signed operator RECOVER plus a separate signed
+allow is required. This safe denial does **not** establish durable rollback
+resistance or a production-ready operator channel.
 
 ## Kernel gate and evidence required before closure
 

@@ -14,6 +14,7 @@ import java.nio.file.*;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Instant;
 import java.util.Map;
+import java.util.function.Function;
 
 /** Local enforcement adapter. The ledger remains the service policy authority. */
 @ApplicationScoped
@@ -35,6 +36,15 @@ public class NativePolicyExporter {
                 && s.policy() != null && s.policy().encrypted()
                 && s.policy().maxBandwidth() == null && s.policy().maxConcurrentConns() == null
                 && (s.policy().expiresAt() == null || s.policy().expiresAt().isAfter(now));
+    }
+
+    /** Explicit disconnected control-plane issuance; never called by refresh or HTTP. */
+    public static NativeIssuanceV2.Envelope issueApproved(
+            NativeIssuanceV2 issuer, NativeIssuanceV2.Payload payload,
+            byte[] supervisorSignature, byte[] operatorSignature,
+            Function<byte[], byte[]> nodeSigner, long nowBoottimeNs) {
+        issuer.expectSigned(payload.bootId(), payload.nonce(), supervisorSignature, nowBoottimeNs);
+        return issuer.issue(payload, operatorSignature, nodeSigner, nowBoottimeNs);
     }
 
     @Scheduled(every = "1s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)

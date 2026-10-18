@@ -9,11 +9,51 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NativeIssuanceV2Test {
+    static final KeyPair SUPERVISOR = supervisorKey();
+    static KeyPair supervisorKey() { try { return key(); } catch (Exception e) { throw new IllegalStateException(e); } }
     static KeyPair key() throws Exception { return KeyPairGenerator.getInstance("Ed25519").generateKeyPair(); }
+    static NativeIssuanceV2 issuer(KeyPair op, KeyPair node, String resource) {
+        return new NativeIssuanceV2(raw(op), raw(node), raw(SUPERVISOR), "svc", "a".repeat(64), resource, "session-1");
+    }
+    static void challenge(NativeIssuanceV2 issuer, NativeIssuanceV2.Payload p) throws Exception {
+        byte[] data = NativeIssuanceV2.challengeBytes(p.bootId(), "session-1", p.nonce(), p.serviceId(), p.clientNodeId(), p.ownerNodeId(), p.resource());
+        issuer.expectSigned(p.bootId(), p.nonce(), sign(SUPERVISOR, data), p.issuedBoottimeNs());
+    }
     static byte[] raw(KeyPair pair) { return Arrays.copyOfRange(pair.getPublic().getEncoded(), 12, 44); }
     static byte[] sign(KeyPair pair, byte[] bytes) throws Exception {
         Signature signature = Signature.getInstance("Ed25519");
         signature.initSign(pair.getPrivate()); signature.update(bytes); return signature.sign();
+    }
+    @Test void supervisorSignedChallengeRequiredForIssuance() throws Exception {
+        KeyPair operator = key(), node = key(), supervisor = key(), attacker = key();
+        var p = new NativeIssuanceV2.Payload(2, "IKEV2_ESP_WIREGUARD", "svc", "a".repeat(64),
+                HexFormat.of().formatHex(raw(node)), "123e4567-e89b-12d3-a456-426614174000",
+                "c".repeat(32), 7, 1_000_000_000L, 2_000_000_000L,
+                "tcp:10.80.0.2:8080", "d".repeat(32), HexFormat.of().formatHex(raw(operator)));
+        var issuer = new NativeIssuanceV2(raw(operator), raw(node), raw(supervisor), "svc", "a".repeat(64), p.resource(), "session-1");
+        byte[] approval = sign(operator, NativeIssuanceV2.canonical(p));
+        assertThrows(SecurityException.class, () -> issuer.expect(p.bootId(), p.nonce()));
+        assertThrows(SecurityException.class, () -> issuer.issue(p, approval, b -> signUnchecked(node, b), 1_100_000_000L));
+        byte[] challenge = NativeIssuanceV2.challengeBytes(p.bootId(), "session-1", p.nonce(), p.serviceId(), p.clientNodeId(), p.ownerNodeId(), p.resource());
+        assertThrows(SecurityException.class, () -> issuer.expectSigned(p.bootId(), p.nonce(), sign(attacker, challenge), 1_100_000_000L));
+        byte[] wrongSession = NativeIssuanceV2.challengeBytes(p.bootId(), "session-old", p.nonce(), p.serviceId(), p.clientNodeId(), p.ownerNodeId(), p.resource());
+        assertThrows(SecurityException.class, () -> issuer.expectSigned(p.bootId(), p.nonce(), sign(supervisor, wrongSession), 1_100_000_000L));
+        issuer.expectSigned(p.bootId(), p.nonce(), sign(supervisor, challenge), 1_100_000_000L);
+        assertNotNull(issuer.issue(p, approval, b -> signUnchecked(node, b), 1_100_000_000L));
+    }
+    @Test void exporterExplicitApprovalCannotUseUnsignedChallenge() throws Exception {
+        KeyPair operator = key(), node = key();
+        var p = new NativeIssuanceV2.Payload(2, "IKEV2_ESP_WIREGUARD", "svc", "a".repeat(64),
+                HexFormat.of().formatHex(raw(node)), "123e4567-e89b-12d3-a456-426614174000",
+                "c".repeat(32), 7, 1_000_000_000L, 2_000_000_000L,
+                "tcp:10.80.0.2:8080", "d".repeat(32), HexFormat.of().formatHex(raw(operator)));
+        var issuer = issuer(operator, node, p.resource());
+        byte[] operatorSignature = sign(operator, NativeIssuanceV2.canonical(p));
+        assertThrows(SecurityException.class, () -> NativePolicyExporter.issueApproved(
+                issuer, p, new byte[64], operatorSignature, b -> signUnchecked(node, b), 1_100_000_000L));
+        var challenge = NativeIssuanceV2.challengeBytes(p.bootId(), "session-1", p.nonce(), p.serviceId(), p.clientNodeId(), p.ownerNodeId(), p.resource());
+        assertNotNull(NativePolicyExporter.issueApproved(issuer, p, sign(SUPERVISOR, challenge),
+                operatorSignature, b -> signUnchecked(node, b), 1_100_000_000L));
     }
     @Test void anIssuerCannotBeCreatedWithoutTrustedScope() throws Exception {
         KeyPair operator = key(), node = key();
@@ -39,10 +79,10 @@ class NativeIssuanceV2Test {
                 + "\nresource=tcp:10.80.0.2:8080\nissuanceId=" + "d".repeat(32)
                 + "\nissuerId=" + payload.issuerId() + "\n";
         assertArrayEquals(expected.getBytes(StandardCharsets.US_ASCII), NativeIssuanceV2.canonical(payload));
-        var issuer = new NativeIssuanceV2(raw(operator), raw(node), "svc", "a".repeat(64), "tcp:10.80.0.2:8080");
+        var issuer = issuer(operator, node, "tcp:10.80.0.2:8080");
         byte[] approval = sign(operator, NativeIssuanceV2.canonical(payload));
         assertThrows(SecurityException.class, () -> issuer.issue(payload, approval, bytes -> signUnchecked(node, bytes), 1_100_000_000L));
-        issuer.expect(payload.bootId(), payload.nonce());
+        challenge(issuer, payload);
         var issued = issuer.issue(payload, approval, bytes -> signUnchecked(node, bytes), 1_100_000_000L);
         assertEquals(Base64.getEncoder().encodeToString(approval), issued.operatorSignature());
         assertTrue(com.defenderlink.mesh.identity.NodeIdentity.verify(
@@ -53,7 +93,7 @@ class NativeIssuanceV2Test {
                 payload.ownerNodeId(), payload.bootId(), "e".repeat(32), 8,
                 payload.issuedBoottimeNs(), payload.deadlineBoottimeNs(), payload.resource(),
                 payload.issuanceId(), payload.issuerId());
-        issuer.expect(reused.bootId(), reused.nonce());
+        challenge(issuer, reused);
         byte[] newlyApproved = sign(operator, NativeIssuanceV2.canonical(reused));
         assertThrows(SecurityException.class, () -> issuer.issue(reused, newlyApproved,
                 bytes -> signUnchecked(node, bytes), 1_100_000_000L));
@@ -67,10 +107,12 @@ class NativeIssuanceV2Test {
         var p = new NativeIssuanceV2.Payload(2, "IKEV2_ESP_WIREGUARD", "svc", "a".repeat(64),
                 HexFormat.of().formatHex(raw(node)), boot, nonce, 7, 1_000_000_000L, 2_000_000_000L,
                 "tcp:10.80.0.2:8080", "d".repeat(32), HexFormat.of().formatHex(raw(operator)));
-        var issuer = new NativeIssuanceV2(raw(operator), raw(node), "svc", "a".repeat(64), p.resource());
-        issuer.expect(boot, nonce);
+        var issuer = issuer(operator, node, p.resource());
         byte[] approval = sign(operator, NativeIssuanceV2.canonical(p));
-        var envelope = issuer.issue(p, approval, bytes -> signUnchecked(node, bytes), 1_100_000_000L);
+        byte[] signedChallenge = sign(SUPERVISOR, NativeIssuanceV2.challengeBytes(
+                p.bootId(), "session-1", p.nonce(), p.serviceId(), p.clientNodeId(), p.ownerNodeId(), p.resource()));
+        var envelope = NativePolicyExporter.issueApproved(issuer, p, signedChallenge, approval,
+                bytes -> signUnchecked(node, bytes), 1_100_000_000L);
         String script = """
                 import json, sys
                 sys.path.insert(0, sys.argv[1])
@@ -94,14 +136,74 @@ class NativeIssuanceV2Test {
         assertEquals("2000000000", output);
     }
 
+    @Test void javaExporterApprovalTransitionsRealPythonAdmission() throws Exception {
+        KeyPair operator = key(), node = key();
+        String boot = "123e4567-e89b-12d3-a456-426614174000";
+        String owner = HexFormat.of().formatHex(raw(node)), client = "a".repeat(64);
+        String resource = "tcp:10.80.0.2:8080", recoveryNonce = "b".repeat(32), grantNonce = "c".repeat(32);
+        var payload = new NativeIssuanceV2.Payload(2, "IKEV2_ESP_WIREGUARD", "svc", client,
+                owner, boot, grantNonce, 2, 1_000_000_000L, 2_000_000_000L,
+                resource, "d".repeat(32), HexFormat.of().formatHex(raw(operator)));
+        var issuer = issuer(operator, node, resource);
+        byte[] supervisorGrant = sign(SUPERVISOR, NativeIssuanceV2.challengeBytes(
+                boot, "session-1", grantNonce, "svc", client, owner, resource));
+        var grant = NativePolicyExporter.issueApproved(issuer, payload, supervisorGrant,
+                sign(operator, NativeIssuanceV2.canonical(payload)), b -> signUnchecked(node, b), 1_100_000_000L);
+        byte[] supervisorRecovery = sign(SUPERVISOR, NativeIssuanceV2.challengeBytes(
+                boot, "session-1", recoveryNonce, "svc", client, owner, resource));
+        String recovery = "DEFENDERLINK-NATIVE-OPERATION-V2\naction=RECOVER\nbootId=" + boot
+                + "\nsessionId=session-1\nnonce=" + recoveryNonce + "\ngeneration=1\nserviceId=svc"
+                + "\nclientNodeId=" + client + "\nownerNodeId=" + owner + "\nresource=" + resource + "\n";
+        String script = """
+                import base64,json,sys,tempfile
+                from pathlib import Path
+                from unittest.mock import patch
+                sys.path.insert(0, sys.argv[1])
+                from admission_v2 import Admission, operation_bytes
+                data=json.load(sys.stdin)
+                e=data['envelope']; p=e['payload']
+                scope={k:p[k] for k in ('serviceId','clientNodeId','ownerNodeId','bootId','resource')}
+                with tempfile.TemporaryDirectory() as directory:
+                    a=Admission(Path(directory)/'journal', bytes.fromhex(sys.argv[2]),
+                                bytes.fromhex(sys.argv[3]), bytes.fromhex(sys.argv[4]), scope, 'session-1')
+                    signatures=iter((data['recoveryChallengeSignature'], data['grantChallengeSignature']))
+                    with patch('admission_v2.secrets.token_hex', side_effect=('b'*32,'c'*32)):
+                        r=a.challenge(lambda _:base64.b64decode(next(signatures)), 1000000000)
+                        op=dict(action='RECOVER', bootId=p['bootId'], sessionId='session-1',
+                                nonce=r['nonce'], generation=1, serviceId=p['serviceId'],
+                                clientNodeId=p['clientNodeId'], ownerNodeId=p['ownerNodeId'], resource=p['resource'])
+                        assert a.apply_operation(op,base64.b64decode(data['recoverySignature']),1000000000)
+                        c=a.challenge(lambda _:base64.b64decode(next(signatures)), 1000000000)
+                        assert c['nonce']==p['nonce']
+                        assert a.accept(e,1100000000)==2000000000
+                        assert a.state(1100000000)=='AUTHORIZED'
+                        assert a.state(2000000000)=='EXPIRED'
+                        print('PENDING_FRESH_APPROVAL->AUTHORIZED->EXPIRED')
+                """;
+        Process process = new ProcessBuilder("/usr/bin/python3", "-c", script,
+                Path.of("scripts/ipsec-dual").toAbsolutePath().toString(),
+                HexFormat.of().formatHex(raw(operator)), owner, HexFormat.of().formatHex(raw(SUPERVISOR)))
+                .redirectErrorStream(true).start();
+        try (var stdin = process.getOutputStream()) {
+            stdin.write(new ObjectMapper().writeValueAsBytes(java.util.Map.of(
+                    "envelope", grant,
+                    "recoverySignature", Base64.getEncoder().encodeToString(sign(operator, recovery.getBytes(StandardCharsets.US_ASCII))),
+                    "recoveryChallengeSignature", Base64.getEncoder().encodeToString(supervisorRecovery),
+                    "grantChallengeSignature", Base64.getEncoder().encodeToString(supervisorGrant))));
+        }
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+        assertEquals(0, process.waitFor(), output);
+        assertEquals("PENDING_FRESH_APPROVAL->AUTHORIZED->EXPIRED", output);
+    }
+
     @Test void forgedAlteredExpiredRebootAndDelayedApprovalDeny() throws Exception {
         KeyPair operator = key(), node = key(), attacker = key();
         var p = new NativeIssuanceV2.Payload(2, "IKEV2_ESP_WIREGUARD", "svc", "a".repeat(64),
                 HexFormat.of().formatHex(raw(node)), "123e4567-e89b-12d3-a456-426614174000",
                 "c".repeat(32), 7, 1_000_000_000L, 2_000_000_000L,
                 "tcp:10.80.0.2:8080", "d".repeat(32), HexFormat.of().formatHex(raw(operator)));
-        var issuer = new NativeIssuanceV2(raw(operator), raw(node), "svc", "a".repeat(64), "tcp:10.80.0.2:8080");
-        issuer.expect(p.bootId(), p.nonce());
+        var issuer = issuer(operator, node, "tcp:10.80.0.2:8080");
+        challenge(issuer, p);
         byte[] approved = sign(operator, NativeIssuanceV2.canonical(p));
         assertThrows(SecurityException.class, () -> issuer.issue(p, sign(attacker, NativeIssuanceV2.canonical(p)), b -> signUnchecked(node, b), 1_100_000_000L));
         assertThrows(SecurityException.class, () -> issuer.issue(new NativeIssuanceV2.Payload(2, p.transport(), "other", p.clientNodeId(), p.ownerNodeId(), p.bootId(), p.nonce(), 7, p.issuedBoottimeNs(), p.deadlineBoottimeNs(), p.resource(), p.issuanceId(), p.issuerId()), approved, b -> signUnchecked(node, b), 1_100_000_000L));
