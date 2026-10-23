@@ -84,6 +84,12 @@ struct arp_eth_ipv4 {
     __be32 ar_tip;
 } __attribute__((packed));
 
+static __always_inline int mac_equal(const __u8 *a, const __u8 *b)
+{
+    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] &&
+           a[3] == b[3] && a[4] == b[4] && a[5] == b[5];
+}
+
 static __always_inline int classify(struct __sk_buff *skb, int reverse)
 {
     count(reverse, INVOKED);
@@ -111,8 +117,8 @@ static __always_inline int classify(struct __sk_buff *skb, int reverse)
                 arp->ar_op != bpf_htons(ARPOP_REPLY) ||
                 arp->ar_sip != bpf_htonl(RESOURCE) ||
                 arp->ar_tip != bpf_htonl(0x0a500001U) ||
-                __builtin_memcmp(arp->sha, eth->h_source, ETH_ALEN) ||
-                __builtin_memcmp(arp->tha, eth->h_dest, ETH_ALEN)) {
+                !mac_equal(arp->sha, eth->h_source) ||
+                !mac_equal(arp->tha, eth->h_dest)) {
                 count(reverse, PARSE_DENIED);
                 return TC_ACT_SHOT;
             }

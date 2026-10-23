@@ -1,5 +1,6 @@
 """One-shot isolated BPF loader probe. No network namespace, TC attachment or grant."""
 import json
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import re
@@ -77,17 +78,24 @@ def classify(stderr, stdout=''):
     return category, reason if category not in ('map_pin_failure', 'program_pin_failure', 'installation_failure') else 'unknown', data['subject'], data['errno'], output
 
 
-def _run(args, *, binary=False):
+def _run(args, *, binary=False, raw_dir=None):
     if not binary:
         return subprocess.run(args, text=True, capture_output=True, timeout=2, check=False)
     # bpftool -d can emit a large verifier trace; never buffer it in memory.
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     heads = {1: bytearray(), 2: bytearray()}
     tails = {1: bytearray(), 2: bytearray()}
     counts = {1: 0, 2: 0}
     deadline = time.monotonic() + 2
     timed_out = False
-    with selectors.DefaultSelector() as selector:
+    with ExitStack() as stack, selectors.DefaultSelector() as selector:
+        raw_files = {}
+        if raw_dir is not None:
+            for fd, name in ((1, 'bpftool.stdout'), (2, 'bpftool.stderr')):
+                handle = os.open(Path(raw_dir)/name,
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600)
+                raw_files[fd] = stack.enter_context(os.fdopen(handle, 'wb'))
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         for fd in (1, 2):
             selector.register(proc.stdout if fd == 1 else proc.stderr, selectors.EVENT_READ, fd)
         try:
@@ -107,6 +115,8 @@ def _run(args, *, binary=False):
                         selector.unregister(key.fileobj)
                         continue
                     counts[fd] += len(chunk)
+                    if fd in raw_files:
+                        raw_files[fd].write(chunk)
                     needed = max(0, 4096 - len(heads[fd]))
                     heads[fd].extend(chunk[:needed])
                     tails[fd] = (tails[fd] + chunk)[-4096:]
@@ -192,7 +202,7 @@ def probe(obj, evidence, pin, *, source):
         record['failing_subprocess'] = COMMAND
         record['failing_executable'], record['failing_operation'] = 'bpftool', 'prog loadall'
         record['argv'] = list(LOAD_ARGV)
-        loaded = _run(args, binary=True)
+        loaded = _run(args, binary=True, raw_dir=evidence.parent)
         record['exit_code'] = loaded.returncode
         record['load_exit_code'] = loaded.returncode
         output = _load_diagnostics(record, loaded.stdout, loaded.stderr,

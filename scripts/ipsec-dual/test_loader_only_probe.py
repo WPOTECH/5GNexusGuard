@@ -15,6 +15,21 @@ spec.loader.exec_module(probe)
 
 
 class LoaderOnlyTests(unittest.TestCase):
+    def test_raw_capture_preserves_full_streams_with_private_exclusive_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = "import os;os.write(1,b'A'*100000);os.write(2,b'B'*120000)"
+            result = probe._run([sys.executable, '-B', '-c', script],
+                                binary=True, raw_dir=root)
+            self.assertEqual(0, result.returncode)
+            for name, expected in (('bpftool.stdout', b'A'*100000),
+                                   ('bpftool.stderr', b'B'*120000)):
+                path = root/name
+                self.assertEqual(expected, path.read_bytes())
+                self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            with self.assertRaises(FileExistsError):
+                probe._run([sys.executable, '-c', 'pass'], binary=True, raw_dir=root)
+
     def test_binary_capture_is_memory_bounded_and_counts_actual_bytes(self):
         script = "import os;os.write(1,b'A'*100000+b'ENDOUT');os.write(2,b'B'*120000+b'ENDERR')"
         result = probe._run([sys.executable, '-B', '-c', script], binary=True)
