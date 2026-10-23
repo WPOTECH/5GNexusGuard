@@ -26,10 +26,11 @@ class EvidenceError(AssertionError):
 class TrafficStream:
     """One persistent TCP connection, retrying after denial; no grant side effects."""
     def __init__(self, host='10.80.0.2', port=8080, *, interval=.01,
-                 timeout=.08, namespace=None):
+                 timeout=.08, namespace=None, new_connections=False):
         self.host, self.port = host, port
         self.interval, self.timeout, self.namespace = interval, timeout, namespace
         self.child = None
+        self.new_connections = new_connections
 
     def start(self, directory):
         self.path = Path(directory) / 'worker.jsonl'
@@ -37,7 +38,8 @@ class TrafficStream:
         with self.path.open('w') as output:
             self.child = subprocess.Popen(prefix + [sys.executable, '-u',
                 str(Path(__file__).with_name('traffic_worker.py')), self.host,
-                str(self.port), str(self.interval), str(self.timeout)],
+                str(self.port), str(self.interval), str(self.timeout)] +
+                (['--new-connections'] if self.new_connections else []),
                 stdout=output, stderr=subprocess.DEVNULL)
 
     def ready(self, delivered=True):

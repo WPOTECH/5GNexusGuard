@@ -13,7 +13,7 @@ def finish(*_):
     running = False
 
 
-def main(host, port, interval, timeout):
+def main(host, port, interval, timeout, new_connections=False):
     signal.signal(signal.SIGINT, finish)
     connection = None
     sequence = 0
@@ -39,6 +39,9 @@ def main(host, port, interval, timeout):
             if connection is not None:
                 connection.close()
                 connection = None
+        elif new_connections:
+            connection.close()
+            connection = None
         verdict = time.monotonic_ns()
         print(json.dumps(dict(attempt_ns=attempt, verdict_ns=verdict,
                               delivered=delivered, sequence=sequence)), flush=True)
@@ -50,4 +53,5 @@ def main(host, port, interval, timeout):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], int(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4]))
+    main(sys.argv[1], int(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4]),
+         '--new-connections' in sys.argv[5:])

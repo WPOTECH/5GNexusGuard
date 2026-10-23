@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch only the scoped functional P0 scenario; keep all raw evidence outside Git."""
+"""Launch functional P0 or one approved P1 category; retain raw evidence outside Git."""
 import argparse
 import json
 import os
@@ -16,6 +16,8 @@ def main():
     parser.add_argument('--java', required=True, type=Path,
                         help='scratch directory containing classes/, test-classes/, lib/')
     parser.add_argument('--image', default='dl-ipsec-isolated-evidence:probe')
+    parser.add_argument('--p1-scenario', choices=('expiry', 'revoke'),
+                        help='run one P1 category instead of functional P0; requires explicit scoped approval')
     args = parser.parse_args()
     if not args.parent_approved:
         parser.error('explicit runtime approval is required; the flag alone is not approval')
@@ -43,6 +45,8 @@ def main():
              '--mount', f'type=volume,src={volume},dst=/lab/evidence',
              '--mount', 'type=tmpfs,dst=/lab/private,tmpfs-mode=0700', '-w', '/lab/src',
              args.image, '/usr/bin/python3', '-B', '/lab/src/scripts/ipsec-dual/p0_container.py']
+    if args.p1_scenario:
+        argv[2:2] = ['-e', 'DL_P1_SCENARIO='+args.p1_scenario]
     (root/'invocation.local.json').write_text(json.dumps(argv)+'\n')
     (root/'ownership.local.json').write_text(json.dumps({'container': name, 'volume': volume})+'\n')
 
@@ -53,7 +57,7 @@ def main():
     if run(argv, 'create'):
         print('P0 blocked: container creation failed; inspect local evidence.', file=sys.stderr)
         return 1
-    print('P0 evidence: '+str(root), flush=True)
+    print(('P1 '+args.p1_scenario if args.p1_scenario else 'P0')+' evidence: '+str(root), flush=True)
     code = run(['docker', 'start', '-a', name], 'container')
     copied = run(['docker', 'cp', name+':/lab/evidence/.', str(root/'captured')], 'copy')
     if copied == 0:
@@ -69,9 +73,13 @@ def main():
         try:
             observed = json.loads((root/'captured/post-cleanup.json').read_text())
             cleanup = json.loads((root/'captured/cleanup.json').read_text())
-            report = json.loads((root/'captured/packet/p0.json').read_text())
-            passed = (report['status'] == report['active_grant']['status'] == 'PASS' and
-                      bool(report['active_packet_evidence']) and
+            report = json.loads((root/('captured/packet/p1.json' if args.p1_scenario
+                                      else 'captured/packet/p0.json')).read_text())
+            scenario_passed = (report['status'] == 'PASS' and
+                               report.get('scenario') == args.p1_scenario) if args.p1_scenario else (
+                               report['status'] == report['active_grant']['status'] == 'PASS' and
+                               bool(report['active_packet_evidence']))
+            passed = (scenario_passed and
                       {row['stage'] for row in cleanup} == {'ticker', 'issuer', 'fixture', 'server', 'topology', 'pins'} and
                       all(row['status'] == 'PASS' for row in cleanup) and
                       set(observed) == {'namespaces', 'pins'} and
@@ -79,7 +87,11 @@ def main():
                           for row in observed.values()))
         except (OSError, ValueError, KeyError, TypeError):
             passed = False
-    status['PROTOTYPE_P0'] = 'WORKING' if passed else 'PARTIAL'
+    if args.p1_scenario:
+        status['P1_SCENARIO'] = args.p1_scenario
+        status['P1_SCENARIO_RESULT'] = 'PASS' if passed else 'FAIL'
+    else:
+        status['PROTOTYPE_P0'] = 'WORKING' if passed else 'PARTIAL'
     (root/'acceptance.json').write_text(json.dumps(status, indent=2)+'\n')
     print(json.dumps(status))
     return 0 if passed else 1

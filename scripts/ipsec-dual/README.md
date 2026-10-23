@@ -230,3 +230,67 @@ cleartext IPv4; all ten captures reported zero drops. The scoped ARP reply and
 pre-grant denial passed, both TC hooks remained attached, the exact nft rule
 checks passed, and all cleanup stages left no namespaces or pins. These are
 isolated functional measurements, not production security acceptance.
+
+## P1: isolated expiration and signed revocation (partial qualification)
+
+P0 reference: `4a379415ac4577d36c316d16afe1b8d508252c5f`. The P0 command above
+remains the default; P1 requires an explicit single-category selector and separate
+runtime approval. Production admission remains disabled. From the same prepared
+Java/image environment, after approval, run expiration first:
+
+```sh
+python3 scripts/ipsec-dual/run_functional_p0.py --parent-approved \
+  --p1-scenario expiry --java "$JAVA_BUILD/target" \
+  --evidence /tmp/mesh-p1-expiry-001
+```
+
+Only if expiration passes, run signed revocation in a fresh container:
+
+```sh
+python3 scripts/ipsec-dual/run_functional_p0.py --parent-approved \
+  --p1-scenario revoke --java "$JAVA_BUILD/target" \
+  --evidence /tmp/mesh-p1-revoke-001
+```
+
+Each scenario uses the unchanged P0 isolation and enforcement, a genuine Java
+V2 grant, simultaneous persistent-connection and new-connection echo workers,
+ten packet captures, authorization/health map snapshots, a map-write audit,
+TC/nft counter snapshots, and verified cleanup. The test checks that every live
+authorization write retains the original deadline. No wall-clock change,
+manual map grant, alternate route, or automatic reauthorization occurs.
+`security_p1.py` records a BOOTTIME-to-MONOTONIC sampling interval for expiry;
+revocation timing starts immediately before the signed operation and ends after
+its normal publisher reconciliation. Application verdicts include scheduling
+and the approximately 80 ms socket timeout, not just kernel enforcement latency.
+
+Observed on Polaris, with the same reviewed image as P0:
+
+| Scenario | Worker | Last successful verdict relative to event start | First denied attempt | First denied verdict |
+|---|---|---:|---:|---:|
+| Original deadline expiry | Established | -0.840 ms | +9.478 ms | +90.199 ms |
+| Original deadline expiry | New connections | -1.699 ms | +8.512 ms | +89.179 ms |
+| Signed revocation | Established | +23.959 ms | +34.076 ms | +114.296 ms |
+| Signed revocation | New connections | +24.142 ms | +34.290 ms | +114.592 ms |
+
+The expiry clock-conversion sampling interval was 0.0017 ms. Signed revocation
+processing/reconciliation completed 38.647 ms after its event start. Traffic
+therefore continued briefly during revocation processing; instantaneous
+revocation is not claimed. No successful attempt began after the respective
+completed event/deadline, and no delivery returned after the first denial.
+
+Expiry recorded 43 map-write attempts with no failures, one TC authorization-
+deadline denial and subsequent authorization-missing drops. Revocation recorded
+40 map-write attempts with no failures and authorization-missing drops. Both
+runs retained both TC hooks, read back zero auth/health maps after denial,
+verified matching TCP SYNs across all four protected boundaries, recorded ten
+zero-drop captures, and completed all six cleanup stages with no namespaces or
+pins remaining. Host network namespace, addresses and routes were unchanged
+across the recorded checks. Raw maps/audits, pcaps and logs stay in private local
+evidence directories and must not be committed.
+
+These runs qualify **normal expiry and successful signed revocation only**.
+Failed map writes/uncertain revocation, independent heartbeat expiry under
+userspace failure, charon crash with surviving XFRM SAs, rollback/replay,
+restart/recovery and independent P1 security review remain unqualified. The
+observed intervals are samples, not guaranteed maximum security bounds. Overall
+P1 and production security acceptance remain incomplete/blocked respectively.

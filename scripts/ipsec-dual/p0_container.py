@@ -68,7 +68,9 @@ def main():
                       '-o', '/lab/evidence/gate.o'], check=True, capture_output=True)
         sys.argv = ['isolated_enforcement.py', '--object', '/lab/evidence/gate.o',
                     '--evidence', '/lab/evidence/packet', '--classpath',
-                    '/lab/java/test-classes:/lab/java/classes:/lab/java/lib/*', '--functional-p0']
+                    '/lab/java/test-classes:/lab/java/classes:/lab/java/lib/*']
+        scenario = os.environ.get('DL_P1_SCENARIO')
+        sys.argv += ['--security-p1', scenario] if scenario else ['--functional-p0']
         runner.main()
     except BaseException as exc:
         (root/'exception.local.txt').write_text(''.join(traceback.format_exception(exc)))
