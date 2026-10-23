@@ -11,7 +11,7 @@
 
 5GNexusGuard is an open-source, fully decentralized Zero Trust Access overlay network. No controller. No single point of failure. No cloud dependency. Every node is sovereign.
 
-https://defenderlinkmesh.com/
+https://5gnexus.com/
 
 ![5GNexusGuard node console — Raft leader status, mesh node list and ledger chain height](docs/dashboard.png)
 
