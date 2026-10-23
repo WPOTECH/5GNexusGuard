@@ -131,3 +131,102 @@ restores exact owned routes even when a wrong route exists. Recovery never issue
 new credentials, widens selectors, or relaxes ACLs. Kernel SAs may survive daemon
 death; fail-closed crash handling depends on supervisor detection and the timed
 lease. See the review for remaining timing and readiness limits.
+
+## Functional P0: signed V2 authorization and active-grant denial
+
+`run_functional_p0.py` runs only the functional grant scenario in the reviewed
+`dl-ipsec-isolated-evidence:probe` image. It creates the isolated topology,
+connects Java exporter → mTLS Authorization Authority → native supervisor →
+BPF maps, validates the packet path, disconnects, and removes its namespaces,
+pins, container and temporary evidence volume. It never enables production
+admission or runs the separate fault-injection sequence. STANDARD remains the
+default; DUAL_TUNNEL remains opt-in.
+
+Prerequisites on Polaris: Docker access, JDK 25, Maven, Python with cryptography,
+and the existing reviewed image. The image includes clang, libbpf/bpftool,
+iproute2/TC, nftables, strongSwan, WireGuard, tcpdump and Java 25. Its locally
+validated image ID is
+`sha256:ecd5c54a5243526f0fde27f061fca30a13e5911e855f6108b348f4b8787ce54e`.
+The existing `isolated-enforcement.Dockerfile` extends the reviewed
+`dl-ipsec-bpf-java25:probe` base; no privilege expansion or host networking is
+needed. An image tag alone does not establish equivalent host/kernel behavior.
+
+Prepare Java artifacts in a new scratch build, preserving the checkout's
+existing generated `target/` files. From the repository root:
+
+```sh
+umask 077
+JAVA_BUILD=$(mktemp -d /tmp/mesh-p0-java.XXXXXX)
+cp -a pom.xml src scripts "$JAVA_BUILD/"
+mvn -B -f "$JAVA_BUILD/pom.xml" \
+  -Dtest='com.defenderlink.mesh.tunnel.nativeaccess.*Test' test
+mvn -B -f "$JAVA_BUILD/pom.xml" dependency:copy-dependencies \
+  -DincludeScope=test -DoutputDirectory="$JAVA_BUILD/target/lib"
+# These contain compiled test code/dependency jars, never runtime credentials.
+# The capability-dropped container needs read access to the mounted directory.
+chmod a+rx "$JAVA_BUILD/target"
+chmod -R a+rX "$JAVA_BUILD/target/classes" \
+  "$JAVA_BUILD/target/test-classes" "$JAVA_BUILD/target/lib"
+```
+
+Obtain explicit runtime approval for the scoped Docker run first. Then start,
+connect, validate, disconnect and clean up with this single command (choose a
+new absolute evidence path outside the repository):
+
+```sh
+python3 scripts/ipsec-dual/run_functional_p0.py --parent-approved \
+  --java "$JAVA_BUILD/target" --evidence /tmp/mesh-p0-evidence-001
+```
+
+The flag guards accidental execution; it is not a substitute for approval.
+The launcher retains `--network none`, the reviewed eight capabilities,
+AppArmor setting, resource limits, read-only source/Java mounts and private
+credential tmpfs. Raw output, nft JSON and pcaps stay in the mode-0700 evidence
+directory, with captured files mode 0600. It prints only the evidence location
+and an acceptance summary. Inspect status locally:
+
+```sh
+cat /tmp/mesh-p0-evidence-001/acceptance.json
+```
+
+Exit zero and `PROTOTYPE_P0=WORKING` require all of the following:
+
+- Zero authorization/health maps and measured pre-grant BPF denial.
+- Genuine signed RECOVER, Java V2 issuance, AA attestation and supervisor approval.
+- Exact original BOOTTIME authorization deadline and bounded live health map.
+- Both named TC programs attached and both independent nft forward hooks verified.
+- Positive TCP echoes and a matching SYN across all four protected boundaries.
+- A scoped resource ARP reply, encrypted WireGuard transit and ESP-only public
+  directional IPv4 egress.
+- A wrong-port SYN arriving through WireGuard and being denied at WG ingress;
+  a wrong-resource-source SYN denied at resource ingress; and an unencapsulated
+  valid protected tuple denied on direct transit by nft. Exact packet identities
+  must appear before enforcement and be absent after enforcement. AF_PACKET
+  injection exercises these ingress checks without broadening endpoint output
+  rules, changing routes, or creating a fallback path.
+- Successful authorized echoes both before and after those negative probes,
+  unchanged authorization, both TC scope-denial counters, and the nft drop counter.
+- Zero capture drops; successful map revocation and cleanup; no remaining named
+  namespaces or BPF pins; successful container and temporary-volume removal.
+
+The checker normalizes only the observed nft conntrack form
+`{"op":"in","left":{"ct":{"key":"state"}},"right":"established"}`.
+It retains exact interfaces, tuple, TC mark, counter, hook priority and default
+DROP requirements. Multi-state sets and membership tests on other fields are
+rejected. No nft rule or packet-path policy was changed for this correction.
+
+This is functional P0 acceptance for the isolated prototype. Production security
+acceptance remains **BLOCKED** pending independent authorization rollback,
+revocation and daemon-crash validation. No website or deployment change follows
+from this result. Keep raw evidence local and outside Git.
+
+Validated on Polaris with the reviewed image: 69 positive baseline echoes and
+60 active-grant echoes, all successful; 15 completed before the negative-probe
+window and 24 began after it. The WG and resource TC scope-denial counters each
+increased by one, and the direct-transit nft drop counter increased by one.
+The labeled negative packets were observed only on their expected pre-enforcement
+boundaries. Public directional egress contained 149/143 ESP packets and no
+cleartext IPv4; all ten captures reported zero drops. The scoped ARP reply and
+pre-grant denial passed, both TC hooks remained attached, the exact nft rule
+checks passed, and all cleanup stages left no namespaces or pins. These are
+isolated functional measurements, not production security acceptance.
