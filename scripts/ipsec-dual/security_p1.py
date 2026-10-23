@@ -1,11 +1,13 @@
 """One P1 category at a time on the P0 transport; never a production admission switch."""
 import json
+import os
 from pathlib import Path
+import re
 import time
 
 from continuous_evidence import CaptureSet, EvidenceError, TrafficStream, denial_bracket, namespace_capture
-from grant_boundary_diagnostic import (BOUNDARIES, assert_packet_boundary, packet_deltas, sample)
-from kernel_gate_publisher_v2 import AUTH, HEALTH
+from grant_boundary_diagnostic import (BOUNDARIES, assert_packet_boundary, decode_map, packet_deltas, sample)
+from kernel_gate_publisher_v2 import AUTH, HEALTH, KEY, command
 from native import NAMES
 
 P0_REFERENCE = '4a379415ac4577d36c316d16afe1b8d508252c5f'
@@ -31,7 +33,41 @@ def verify_denial(rows, event_low, event_high):
     return result
 
 
-def run(root, scenario, fixture, issuer, ticker, publisher, inner, grant):
+def deadline_interval(deadline):
+    """Bracket a BOOTTIME deadline on MONOTONIC without changing either clock."""
+    low = time.monotonic_ns()
+    boot = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+    high = time.monotonic_ns()
+    return low+deadline-boot, high+deadline-boot
+
+
+def xfrm_counts():
+    result = {}
+    for role in ('e', 'o'):
+        text = command(['ip', 'netns', 'exec', NAMES[role], 'ip', 'xfrm', 'state', 'count'])
+        found = re.fullmatch(r'\s*SAD count (\d+)\s*', text)
+        if not found:
+            raise EvidenceError('P1: XFRM SA count unavailable')
+        result[role] = int(found[1])
+    return result
+
+
+def kill_owned_charon(topology):
+    child = topology.daemon_roles['o']
+    if (child.poll() is not None or child.pid <= 1 or
+            os.stat(f'/proc/{child.pid}/ns/net').st_ino !=
+            os.stat('/run/netns/'+NAMES['o']).st_ino):
+        raise EvidenceError('P1: owned outer charon identity absent')
+    low = time.monotonic_ns()
+    child.kill()
+    child.wait(timeout=2)
+    if child.returncode != -9:
+        raise EvidenceError('P1: owned charon was not terminated by SIGKILL')
+    return {'signal_monotonic_ns': low, 'reaped_monotonic_ns': time.monotonic_ns(),
+            'returncode': child.returncode}
+
+
+def run(root, scenario, fixture, issuer, ticker, publisher, inner, grant, *, topology=None):
     root = Path(root)/('p1-'+scenario)
     root.mkdir(mode=0o700)
     for name in ('pre', 'established', 'new'):
@@ -89,6 +125,22 @@ def run(root, scenario, fixture, issuer, ticker, publisher, inner, grant):
                 if event_low <= m1:
                     raise EvidenceError('P1: grant expired before fault baseline')
                 wait_until = event_high+800_000_000
+            elif scenario == 'charon_crash':
+                report['xfrm_before'] = xfrm_counts()
+                if any(count < 1 for count in report['xfrm_before'].values()):
+                    raise EvidenceError('P1: live outer XFRM SAs absent before fault')
+                response = json.loads(inner(['bpftool', '-j', 'map', 'lookup', 'pinned',
+                                              publisher.health_path, 'key', 'hex', *KEY]))
+                health = decode_map(response, HEALTH)
+                if time.clock_gettime_ns(time.CLOCK_BOOTTIME) >= health['deadline_ns']:
+                    raise EvidenceError('P1: health expired before charon fault baseline')
+                report['health_at_fault'] = health
+                report['health_deadline_interval_monotonic_ns'] = deadline_interval(health['deadline_ns'])
+                report['fault'] = kill_owned_charon(topology)
+                report['xfrm_after_crash'] = xfrm_counts()
+                event_low = report['fault']['signal_monotonic_ns']
+                event_high = report['health_deadline_interval_monotonic_ns'][1]
+                wait_until = max(event_high, report['fault']['reaped_monotonic_ns'])+800_000_000
             else:
                 raise ValueError('unknown P1 category')
         while time.monotonic_ns() < wait_until:
@@ -106,7 +158,7 @@ def run(root, scenario, fixture, issuer, ticker, publisher, inner, grant):
         assert_no_extension(report['writes'], deadline)
         before, after = (row[1] for row in report['snapshots'])
         report['packet_deltas'] = packet_deltas(before, after)
-        if (after['controller_status'] != 'DENIED' or
+        if ((scenario != 'charon_crash' and after['controller_status'] != 'DENIED') or
                 any(row['value']['epoch'] for row in after['maps'].values()) or
                 any(not row['attached'] for row in after['tc'].values())):
             raise EvidenceError('P1: control/maps/hooks not in expected denied state')

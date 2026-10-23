@@ -5,6 +5,28 @@ from security_p1 import assert_no_extension, verify_denial
 
 
 class SecurityP1Tests(unittest.TestCase):
+    def test_crash_allows_only_pre_deadline_grace_without_later_delivery(self):
+        rows = [dict(attempt_ns=1, verdict_ns=2, delivered=True),
+                dict(attempt_ns=4, verdict_ns=5, delivered=True),
+                dict(attempt_ns=9, verdict_ns=10, delivered=False)]
+        verify_denial(rows, 3, 8)
+        with self.assertRaises(EvidenceError):
+            verify_denial(rows[:1]+[dict(attempt_ns=8, verdict_ns=9, delivered=True)]
+                          +[dict(attempt_ns=10, verdict_ns=11, delivered=False)], 3, 8)
+
+    def test_charon_fault_refuses_a_process_outside_owned_namespace(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from security_p1 import kill_owned_charon
+        child = Mock(pid=123)
+        child.poll.return_value = None
+        topology = SimpleNamespace(daemon_roles={'o': child})
+        with patch('security_p1.os.stat', side_effect=[SimpleNamespace(st_ino=11),
+                                                       SimpleNamespace(st_ino=12)]):
+            with self.assertRaisesRegex(EvidenceError, 'identity absent'):
+                kill_owned_charon(topology)
+        child.kill.assert_not_called()
+
     def test_real_echo_worker_distinguishes_established_and_new_connections(self):
         import socketserver
         import tempfile

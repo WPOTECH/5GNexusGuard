@@ -510,7 +510,7 @@ def run(args):
         if getattr(args, 'security_p1', None):
             from security_p1 import run as qualify_security
             qualify_security(evidence, args.security_p1, fixture, issuer, ticker,
-                             publisher, inner, grant)
+                             publisher, inner, grant, topology=topology)
             return
         if args.grant_diagnostic or getattr(args, 'functional_p0', False):
             from grant_boundary_diagnostic import run as diagnose_grant
@@ -580,7 +580,7 @@ def main():
                         help='one bounded grant-phase packet probe; never run faults')
     parser.add_argument('--functional-p0', action='store_true',
                         help='grant-only positive path plus active-grant negative packet probes; no faults')
-    parser.add_argument('--security-p1', choices=('expiry', 'revoke'),
+    parser.add_argument('--security-p1', choices=('expiry', 'revoke', 'charon_crash'),
                         help='exactly one P1 fault category per isolated container')
     args = parser.parse_args()
     if not args.object.is_file():
