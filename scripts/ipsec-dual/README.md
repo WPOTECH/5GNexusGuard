@@ -382,7 +382,18 @@ These are measured kernel fail-closed results, not proven maximum bounds.
 Application denial verdicts include roughly 80 ms socket timeout plus scheduling;
 limits assume the reviewed BPF program and exclusive trusted ownership of maps,
 TC/nft hooks, namespaces and clock sources. Privileged tampering is outside this
-experiment. Full P1 qualification, independent reviewer sign-off and production
-security acceptance remain separate gates; rollback/replay/restart and broader
+experiment. Full P1 qualification and production security acceptance remain
+separate gates; rollback/replay/restart and broader
 recovery guarantees are not inferred from these two scenarios. Production
 admission remains disabled and the website is unchanged.
+
+Independent P1.3 review completed on 2026-10-24 for commit
+`6e26c413fbd974601750e8f598c5917a3af59bae` and the two saved experiments.
+A separate read-only reviewer inspected the implementation and actual private
+evidence, independently parsed the packet metadata, and found no HIGH or
+CRITICAL issues. P1.3 independent review is **PASS**, scoped to the measured
+kernel fail-closed behavior and stated trust assumptions. No privileged rerun
+was needed. One nonblocking LOW remains: `Supervisor.close()` does not surface
+a nonzero graceful child exit status; the reviewed runs were protected by the
+separate outer cleanup/readback checks. This sign-off does not qualify rollback,
+replay, reboot freshness or production deployment.
