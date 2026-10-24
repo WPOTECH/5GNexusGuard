@@ -397,3 +397,57 @@ was needed. One nonblocking LOW remains: `Supervisor.close()` does not surface
 a nonzero graceful child exit status; the reviewed runs were protected by the
 separate outer cleanup/readback checks. This sign-off does not qualify rollback,
 replay, reboot freshness or production deployment.
+
+## P1.4 preparation: rollback, replay and reboot freshness
+
+P1.3 independent review is complete. P1.4 currently has **control-plane regression
+coverage only**; its privileged packet scenarios and actual reboot qualification
+have not run. No host clock or boot ID was changed and no P1.3 packet rerun was
+needed.
+
+`test_freshness_p14.py` uses the real Java exporter and loopback mTLS AA with
+throwaway fixture keys. Twelve focused controls cover duplicate issuance without
+deadline extension, revoked-generation replay, correctly signed stale generation,
+supervisor restart, exporter restart without receiver-floor reset, prior-boot
+replay, boot binding with the same live nonce/generation, missing high-water
+state, rolled-back high-water state, combined local journal/floor rollback,
+controller-local wall-clock rollback, and fresh-authority recovery after clock
+quarantine. Invalidly scoped negative envelopes have real test operator/node
+signatures; the boot-only test then accepts the original genuine Java envelope
+as its positive control.
+
+Run these unprivileged preparation checks after the existing scratch Java build:
+
+```sh
+TEST_CLI_CLASSPATH="$JAVA_BUILD/target/test-classes:$JAVA_BUILD/target/classes:$JAVA_BUILD/target/lib/*" \
+  python3 -m unittest discover -s scripts/ipsec-dual -p test_freshness_p14.py -v
+```
+
+The initial wall-rollback control demonstrated that the supervisor continued
+reporting cached `ATTESTED` authority when only its own clock view moved back
+60 seconds. The original BOOTTIME grant was still bounded; this was a missing
+freshness quarantine, not an extension of kernel permissions. The correction
+adds an instance-local wall source and a per-session millisecond high-water
+check in Controller. Observed backward or invalid wall readings clear cached AA
+deadlines and latch denial. Returning the clock forward cannot revive the
+session. A new supervisor session, signed RECOVER, fresh Java approval and AA
+attestation are required. No BOOTTIME deadline is resampled and no BPF/nft or
+STANDARD default is changed. The clock source is local to the Controller;
+AA/TLS clocks and the host time module remain untouched by the tests.
+
+A separate reviewer found no HIGH or CRITICAL regression in this narrow
+correction and independently ran the original eleven controls plus the added
+boot-only binding control. The broader 277-test regression suite, the added
+boot-only test, all twelve focused controls, and eighteen Maven native-access
+tests passed. Maven output was built in scratch storage, preserving the
+checkout's generated `target/` changes.
+
+Next packet validation must use fresh scoped runtime approval and the existing
+isolated harness, one freshness fault category at a time: local clock rollback,
+replay/stale generation, then restart/boot-identity and high-water faults. Require
+a real authorized baseline, measured denial of both TCP modes, normal
+Controller/Publisher handling and a fresh signed recovery baseline. The modeled
+boot-ID tests do not constitute an actual reboot or prove kernel boot-reset
+behavior. Likewise, restored local-state tests demonstrate denial of stale
+proof, not a tamper-proof persistent monotonic anchor. Full P1 and production
+security acceptance remain incomplete; production admission stays disabled.

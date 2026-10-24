@@ -86,7 +86,8 @@ def atomic_private_write(path, data):
 
 class Controller:
     def __init__(self, directory, scope, operator_key, node_key, supervisor_signer,
-                 aa_url, ca_file, node_cert, node_tls_key, aa_key, request_attestation=None):
+                 aa_url, ca_file, node_cert, node_tls_key, aa_key, request_attestation=None,
+                 wall_time=None):
         self.directory = private_directory(directory)
         if not aa_url or not all((ca_file, node_cert, node_tls_key)):
             raise ValueError('AA endpoint and mTLS paths required')
@@ -114,7 +115,30 @@ class Controller:
         self.until_ms = 0
         self.until_ns = 0
         self.approval_nonce = None
+        self.wall_time = wall_time or time.time
+        self.last_wall_ms = None
+        self.wall_clock_failed = False
+        self._wall_ms()
         self._publish_challenge()
+
+    def _wall_ms(self):
+        """Quarantine this session on wall rollback; never change BOOTTIME authority.
+
+        The optional source is local to this controller, so test clock faults do
+        not change AA/TLS clocks. Only a new denied session can recover after a
+        regression; returning the wall clock forward cannot revive cached proof.
+        """
+        try:
+            current = int(self.wall_time()*1000)
+        except (ValueError, TypeError, OverflowError):
+            current = -1
+        if (self.wall_clock_failed or current < 0 or
+                self.last_wall_ms is not None and current < self.last_wall_ms):
+            self.wall_clock_failed = True
+            self.until_ms = self.until_ns = 0
+            return None
+        self.last_wall_ms = current
+        return current
 
     def _load_floors(self):
         try:
@@ -142,6 +166,8 @@ class Controller:
         return json.loads(raw, object_pairs_hook=_unique_pairs)
 
     def step(self):
+        if self._wall_ms() is None:
+            return 'DENIED'
         now = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
         status = self.admission.state(now)
         if status != 'AUTHORIZED':
@@ -167,7 +193,8 @@ class Controller:
                 return 'DENIED'
             if self.approval_nonce and not self.until_ns:
                 self._attest(now)
-            if now >= self.until_ns or int(time.time()*1000) >= self.until_ms:
+            wall = self._wall_ms()
+            if wall is None or now >= self.until_ns or wall >= self.until_ms:
                 return 'DENIED'
             return 'ATTESTED'  # informational only; never opens packet ACLs
         except (OSError, ValueError, TypeError, KeyError):
@@ -189,7 +216,10 @@ class Controller:
         self.floors = floors
         # AA verifier bounds its wall-clock validity to 30 s. Use a shorter
         # monotonic interval; wall-clock step still checks this deadline too.
-        remaining_ms = max(0, min(29000, verifier.accepted_expires_at_ms - int(time.time()*1000)))
+        wall = self._wall_ms()
+        if wall is None:
+            return
+        remaining_ms = max(0, min(29000, verifier.accepted_expires_at_ms - wall))
         self.until_ms = verifier.accepted_expires_at_ms
         self.until_ns = min(self.admission.deadline, time.clock_gettime_ns(time.CLOCK_BOOTTIME) + remaining_ms * 1_000_000)
 
