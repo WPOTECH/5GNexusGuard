@@ -294,3 +294,95 @@ userspace failure, charon crash with surviving XFRM SAs, rollback/replay,
 restart/recovery and independent P1 security review remain unqualified. The
 observed intervals are samples, not guaranteed maximum security bounds. Overall
 P1 and production security acceptance remain incomplete/blocked respectively.
+
+## P1.3: retained-map kernel enforcement (experimental qualification)
+
+Baseline: `6ff60b5d8e4bc1af8c8712b6d06ab41cfeb92780`. The test-only
+`p1_supervisor_process.py` runs the existing Controller, Publisher and FreshHealth
+in a separate process. AA, Java, captures, the application and both charon
+processes remain outside it. Private supervisor credentials travel over stdin,
+never argv or evidence. The child verifies the actual TC program IDs, exact nft
+interlocks and zero maps before taking over; it starts a fresh denied session
+and requires genuine signed RECOVER plus Java V2/AA approval. No production
+entry point or enforcement policy is changed.
+
+After explicit scoped runtime approval, use the same Java/image preparation as
+P0 and run these categories in order, with fresh evidence directories:
+
+```sh
+python3 scripts/ipsec-dual/run_functional_p0.py --parent-approved \
+  --p1-scenario supervisor_failure --java "$JAVA_BUILD/target" \
+  --evidence /tmp/mesh-p13-supervisor-001
+# Only if supervisor failure passes, and approval includes this category:
+python3 scripts/ipsec-dual/run_functional_p0.py --parent-approved \
+  --p1-scenario map_update_failure --java "$JAVA_BUILD/target" \
+  --evidence /tmp/mesh-p13-map-update-001
+```
+
+The supervisor fault verifies PID, process start identity and container network
+namespace before SIGKILL. No graceful handler can clear the maps. Both nonzero
+auth/health entries must remain identical from the post-kill snapshot through
+the full observation window. The test waits beyond both original deadlines,
+requires both TCP modes to stop, and requires actual TC health-deadline and
+authorization-deadline rejection counters. AA and charon must remain alive.
+
+The map fault freezes only the owned auth/health maps, creating real kernel
+`Operation not permitted` update errors. A genuine signed revoke and explicit
+reconciliation must report uncertainty, never successful publication. The stale
+nonzero entries must remain unchanged until observation finishes beyond their
+original deadlines. A failed revoke does not immediately remove exposure.
+
+Only after those measurements and the original authorization expiry does the
+map-fault test recover: remove the expired frozen map pins, reinstall the same
+gate under the still-present native priority-0 default-DROP interlock, and start
+a fresh supervisor session. Old signed authority must leave the gate denied;
+new signed recovery, Java V2 approval and AA attestation must precede resumed
+traffic. Replacing expired lab maps is test lifecycle recovery, not production
+recovery qualification. No alternate route or enforcement engine is added.
+
+Measured Polaris results, relative to SIGKILL or the start of map freezing:
+
+| Fault | TCP mode | Last successful attempt | Last successful verdict | First denied attempt | Denied verdict |
+|---|---|---:|---:|---:|---:|
+| Supervisor SIGKILL | Established | 370.338 ms | 371.201 ms | 381.416 ms | 461.720 ms |
+| Supervisor SIGKILL | New | 371.533 ms | 373.560 ms | 383.662 ms | 463.878 ms |
+| Frozen-map update failure | Established | 290.494 ms | 291.305 ms | 301.516 ms | 381.831 ms |
+| Frozen-map update failure | New | 286.147 ms | 287.904 ms | 298.041 ms | 378.417 ms |
+
+The retained health deadlines were +375.860 ms and +297.027 ms respectively;
+the original authorization deadlines were +2621.327 ms and +2559.271 ms.
+Each health entry retained its original 500 ms validity from its checked time.
+No successful attempt or verdict was observed beyond the applicable health
+deadline. Both scenarios recorded 49 TC health-deadline and 15 TC auth-deadline
+SYN rejections, with zero auth-missing/health-missing rejections in the measured
+window. Both nonzero maps and both TC hooks survived unchanged through expiry.
+Neither loss of the supervisor nor rejected writes removed XFRM SAs: each
+endpoint retained two, while AA and charon stayed alive.
+
+The map test recorded three kernel-rejected updates and persistent
+`revocation_uncertain=true` across three reconciliations. Its residual forwarding
+window ended at the retained heartbeat deadline; immediate revocation is not
+claimed. Old authority replay stayed denied during recovery. Fresh signed
+generation 5 in a new session restored 12 established and 10 new TCP echoes.
+The deliberate direct-underlay probe was seen on transit, incremented the nft
+DROP counter once, and was absent at the protected resource.
+
+Independent offline packet parsing paired 77 successful application echoes per
+scenario with their worker timestamps. Observed packet/monotonic alignment
+intervals were 63.011 and 56.718 microseconds wide. No protected client packet
+was seen at the resource beyond the retained health deadline during either
+original observation window. Directional public egress was ESP-only (no
+cleartext IPv4), and transit carried WireGuard UDP except the labeled negative
+probe. Fresh recovery traffic was assessed separately from expired authority.
+All ten captures per scenario reported zero drops; all cleanup stages passed
+with no remaining namespace or pins. Raw packets, failed-update stderr, maps
+and credentials are not committed.
+
+These are measured kernel fail-closed results, not proven maximum bounds.
+Application denial verdicts include roughly 80 ms socket timeout plus scheduling;
+limits assume the reviewed BPF program and exclusive trusted ownership of maps,
+TC/nft hooks, namespaces and clock sources. Privileged tampering is outside this
+experiment. Full P1 qualification, independent reviewer sign-off and production
+security acceptance remain separate gates; rollback/replay/restart and broader
+recovery guarantees are not inferred from these two scenarios. Production
+admission remains disabled and the website is unchanged.

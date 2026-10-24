@@ -16,7 +16,8 @@ def main():
     parser.add_argument('--java', required=True, type=Path,
                         help='scratch directory containing classes/, test-classes/, lib/')
     parser.add_argument('--image', default='dl-ipsec-isolated-evidence:probe')
-    parser.add_argument('--p1-scenario', choices=('expiry', 'revoke', 'charon_crash'),
+    parser.add_argument('--p1-scenario', choices=('expiry', 'revoke', 'charon_crash', 'supervisor_failure',
+                                               'map_update_failure'),
                         help='run one P1 category instead of functional P0; requires explicit scoped approval')
     args = parser.parse_args()
     if not args.parent_approved:

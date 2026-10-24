@@ -507,6 +507,11 @@ def run(args):
               ' challenge=' + str(health()), file=sys.stderr)
         ticker = TickLoop(publisher)
         ticker.thread.start()
+        if getattr(args, 'security_p1', None) in ('supervisor_failure', 'map_update_failure'):
+            from independent_kernel_p1 import run as qualify_independent
+            qualify_independent(evidence, args.security_p1, fixture, issuer, ticker,
+                                publisher, inner, topology=topology)
+            return
         if getattr(args, 'security_p1', None):
             from security_p1 import run as qualify_security
             qualify_security(evidence, args.security_p1, fixture, issuer, ticker,
@@ -580,7 +585,8 @@ def main():
                         help='one bounded grant-phase packet probe; never run faults')
     parser.add_argument('--functional-p0', action='store_true',
                         help='grant-only positive path plus active-grant negative packet probes; no faults')
-    parser.add_argument('--security-p1', choices=('expiry', 'revoke', 'charon_crash'),
+    parser.add_argument('--security-p1', choices=('expiry', 'revoke', 'charon_crash', 'supervisor_failure',
+                                                'map_update_failure'),
                         help='exactly one P1 fault category per isolated container')
     args = parser.parse_args()
     if not args.object.is_file():
