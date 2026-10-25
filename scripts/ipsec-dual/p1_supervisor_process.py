@@ -37,6 +37,10 @@ def main():
     c = Controller(directory, cfg['scope'], bytes.fromhex(cfg['operator']),
                    bytes.fromhex(cfg['node']), signer, cfg['url'], cfg['ca'], cfg['cert'],
                    cfg['key'], bytes.fromhex(cfg['aa_key']))
+    wall_offset = 0
+    publication_paused = False
+    if cfg.get('p14_controls', False):
+        c.wall_time = lambda: time.time()+wall_offset
     del signer
     health = FreshHealth(cfg['pids'], 'wg-inner', 'resource', NAMES['e'], NAMES['o'],
                          NAMES['i'], vici_dir=Path(cfg['vici']))
@@ -87,6 +91,8 @@ def main():
 
     def tick():
         nonlocal error
+        if publication_paused:
+            return False
         try:
             published = p.tick()
             error = None
@@ -100,6 +106,9 @@ def main():
                 'session': c.session, 'generation': c.admission.generation,
                 'status': status, 'admission_state': c.admission.status,
                 'deadline_ns': c.admission.deadline,
+                'until_ns': c.until_ns, 'until_ms': c.until_ms,
+                'wall_clock_failed': c.wall_clock_failed,
+                'wall_offset_seconds': wall_offset, 'publication_paused': publication_paused,
                 'revocation_uncertain': p.revocation_uncertain, 'published': published,
                 'last_error': error, 'challenge': json.loads((directory/'challenge.json').read_text())}
 
@@ -122,6 +131,17 @@ def main():
             elif action in ('state', 'reconcile'):
                 status = c.step()
                 published = tick() if action == 'reconcile' else False
+            elif action == 'wall_offset' and cfg.get('p14_controls', False):
+                value = request['seconds']
+                if type(value) is not int or value not in (-60, 0):
+                    raise ValueError('only the reviewed local clock fault/restoration is allowed')
+                wall_offset = value
+                status = c.step()
+                published = tick()
+            elif action == 'pause_publication' and cfg.get('p14_controls', False):
+                publication_paused = True
+                status = c.step()
+                published = False
             else:
                 raise ValueError('unknown supervisor test operation')
             print(json.dumps(state(status, published)), flush=True)

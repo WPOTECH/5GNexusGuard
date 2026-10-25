@@ -60,17 +60,19 @@ def assert_hooks(snapshot):
 
 
 class Supervisor:
-    def __init__(self, fixture, publisher, directory):
+    def __init__(self, fixture, publisher, directory, *, test_controls=False):
         from isolated_enforcement import pkcs8, raw
         self.log = (directory/'supervisor.stderr.local').open('w')
         self.process = subprocess.Popen([sys.executable, '-B', str(Path(__file__).with_name('p1_supervisor_process.py'))],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True, bufsize=1)
+        self._killed_by_test = False
         c = fixture.controller
         cfg = dict(directory=str(fixture.root), scope=fixture.scope, operator=raw(fixture.operator).hex(),
                    node=raw(fixture.node).hex(), signer=pkcs8(fixture.supervisor), url=c.url, ca=c.ca,
                    cert=c.cert, key=c.key, aa_key=raw(fixture.aa_signer).hex(),
                    pids=list(publisher.health_check.pids), vici=str(publisher.health_check.vici_dir),
-                   pin=str(publisher.pin_dir), audit=str(directory/'map-writes.local.jsonl'))
+                   pin=str(publisher.pin_dir), audit=str(directory/'map-writes.local.jsonl'),
+                   p14_controls=test_controls)
         try:
             self.process.stdin.write(json.dumps(cfg)+'\n'); self.process.stdin.flush()
             self.initial = self.receive()
@@ -102,16 +104,24 @@ class Supervisor:
         low = time.monotonic_ns(); p.kill(); p.wait(timeout=2)
         if p.returncode != -9:
             raise EvidenceError('P1.3: supervisor did not exit by SIGKILL')
+        self._killed_by_test = True
         return {'pid': p.pid, 'start': self.start, 'signal_monotonic_ns': low,
                 'reaped_monotonic_ns': time.monotonic_ns(), 'returncode': p.returncode}
 
     def close(self):
-        if self.process.poll() is None:
-            self.process.stdin.close()
-            try: self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired: self.process.kill(); self.process.wait(timeout=2)
-        if not self.process.stdin.closed: self.process.stdin.close()
-        self.process.stdout.close(); self.log.close()
+        timed_out = False
+        try:
+            if self.process.poll() is None:
+                self.process.stdin.close()
+                try: self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    timed_out = True; self.process.kill(); self.process.wait(timeout=2)
+        finally:
+            if not self.process.stdin.closed: self.process.stdin.close()
+            self.process.stdout.close(); self.log.close()
+        expected = (0, -9) if getattr(self, '_killed_by_test', False) else (0,)
+        if timed_out or self.process.returncode not in expected:
+            raise EvidenceError('supervisor cleanup failed: unexpected exit or graceful timeout')
 
 
 def operate(supervisor, fixture, action):

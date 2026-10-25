@@ -17,7 +17,11 @@ def main():
                         help='scratch directory containing classes/, test-classes/, lib/')
     parser.add_argument('--image', default='dl-ipsec-isolated-evidence:probe')
     parser.add_argument('--p1-scenario', choices=('expiry', 'revoke', 'charon_crash', 'supervisor_failure',
-                                               'map_update_failure'),
+                                               'map_update_failure', 'p14_wall_rollback', 'p14_envelope_replay',
+                                               'p14_operation_replay', 'p14_stale_generation',
+                                               'p14_duplicate_issuance', 'p14_supervisor_restart',
+                                               'p14_highwater_missing', 'p14_highwater_rollback',
+                                               'p14_epoch_mismatch'),
                         help='run one P1 category instead of functional P0; requires explicit scoped approval')
     args = parser.parse_args()
     if not args.parent_approved:

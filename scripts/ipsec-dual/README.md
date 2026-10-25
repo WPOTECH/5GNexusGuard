@@ -393,17 +393,19 @@ A separate read-only reviewer inspected the implementation and actual private
 evidence, independently parsed the packet metadata, and found no HIGH or
 CRITICAL issues. P1.3 independent review is **PASS**, scoped to the measured
 kernel fail-closed behavior and stated trust assumptions. No privileged rerun
-was needed. One nonblocking LOW remains: `Supervisor.close()` does not surface
+was needed. One nonblocking LOW was recorded: `Supervisor.close()` did not surface
 a nonzero graceful child exit status; the reviewed runs were protected by the
 separate outer cleanup/readback checks. This sign-off does not qualify rollback,
 replay, reboot freshness or production deployment.
+The P1.4 packet-driver work below resolves that observability finding with
+explicit unexpected-exit and graceful-timeout checks.
 
 ## P1.4 preparation: rollback, replay and reboot freshness
 
-P1.3 independent review is complete. P1.4 currently has **control-plane regression
-coverage only**; its privileged packet scenarios and actual reboot qualification
-have not run. No host clock or boot ID was changed and no P1.3 packet rerun was
-needed.
+P1.3 independent review is complete. Preparation at `a054882` established the
+control-plane regressions below. The subsequently approved P1.4 packet cases
+are recorded in the next section; **actual reboot qualification remains blocked**.
+No host clock or boot ID was changed and no P1.3 packet rerun was needed.
 
 `test_freshness_p14.py` uses the real Java exporter and loopback mTLS AA with
 throwaway fixture keys. Twelve focused controls cover duplicate issuance without
@@ -442,12 +444,113 @@ boot-only test, all twelve focused controls, and eighteen Maven native-access
 tests passed. Maven output was built in scratch storage, preserving the
 checkout's generated `target/` changes.
 
-Next packet validation must use fresh scoped runtime approval and the existing
-isolated harness, one freshness fault category at a time: local clock rollback,
-replay/stale generation, then restart/boot-identity and high-water faults. Require
-a real authorized baseline, measured denial of both TCP modes, normal
-Controller/Publisher handling and a fresh signed recovery baseline. The modeled
+Packet validation uses scoped runtime approval and the existing isolated
+harness, one freshness category per fresh container, with a real authorized
+baseline, measured denial of both TCP modes, normal Controller/Publisher
+handling and a fresh signed recovery baseline. The modeled
 boot-ID tests do not constitute an actual reboot or prove kernel boot-reset
 behavior. Likewise, restored local-state tests demonstrate denial of stale
 proof, not a tamper-proof persistent monotonic anchor. Full P1 and production
 security acceptance remain incomplete; production admission stays disabled.
+
+## P1.4 packet validation: scoped non-reboot results
+
+Nine explicitly approved cases completed once each on Polaris using the same
+reviewed Docker image, `--network none`, eight capabilities, AppArmor setting,
+read-only source/Java mounts and credential tmpfs as P0. No packet case failed
+or needed a rerun. The test-only driver is `freshness_packet_p14.py`; none of
+its fault controls is a production admission path. Clock offset and paused
+publication hooks require the private child's explicit P1.4 fixture flag.
+Kernel enforcement, native authorization protocol and STANDARD default are
+unchanged.
+
+After separate runtime approval, reproduce a single case with the existing
+Java/image setup, selecting exactly one category and a new evidence directory:
+
+```sh
+python3 scripts/ipsec-dual/run_functional_p0.py --parent-approved \
+  --p1-scenario p14_wall_rollback --java "$JAVA_BUILD/target" \
+  --evidence /tmp/mesh-p14-wall-001
+```
+
+The other reviewed selectors are `p14_envelope_replay`, `p14_operation_replay`,
+`p14_stale_generation`, `p14_duplicate_issuance`, `p14_supervisor_restart`,
+`p14_highwater_missing`, `p14_highwater_rollback` and `p14_epoch_mismatch`.
+The approval flag alone never establishes permission to run them.
+
+Every case requires a live original authorization/heartbeat baseline immediately
+before the fault, both established and fresh TCP connections, positive actual
+TC rejection counters during denial, exact unchanged TC/nft hooks, a counted
+direct-underlay rejection, and new-session signed RECOVER plus genuine Java
+V2/AA approval before positive recovery. Invalid submissions must not publish,
+advance the receiver generation floor or install an authorization deadline.
+High-water faults may leave a nonusable cached admission deadline, but cached
+AA proof must be zero and actual kernel permits must be cleared. The epoch
+case deliberately changes only the owned health-map epoch while publication is
+paused; an actual epoch-rejection counter must be read before health expiry.
+
+Observed timing below is milliseconds from the recorded fault-request window
+start. Each E/N pair means established/new TCP. Request windows include queued
+health checks, RPC/fault setup and reconciliation; the epoch map mutation occurs
+inside that window. Verdicts include approximately 80 ms socket timeout.
+These are observed application intervals, not instantaneous revocation or proven
+maximum kernel bounds.
+
+| Case | First denied attempt E/N | Denied verdict E/N | Actual TC denial evidence |
+|---|---:|---:|---|
+| Local wall rollback/restoration | 130.793 / 131.022 | 211.045 / 211.372 | 50 auth-missing |
+| Old/revoked envelope replay | 122.488 / 126.185 | 202.780 / 206.531 | 12 auth-missing |
+| Signed REVOKE/RECOVER replay | 96.806 / 93.571 | 177.108 / 173.849 | 14 auth-missing |
+| Correctly signed stale generation | 132.851 / 133.169 | 213.105 / 213.453 | 12 auth-missing |
+| Duplicate issuance with live nonce/new generation | 125.782 / 118.943 | 206.062 / 199.241 | 11 auth-missing, 1 health-missing |
+| Supervisor SIGKILL/restart | 396.501 / 403.808 | 476.800 / 484.126 | 5 health-deadline, 37 auth-missing |
+| Missing high-water state | 129.279 / 138.459 | 209.629 / 218.711 | 12 auth-missing |
+| Rolled-back high-water state | 137.322 / 130.004 | 217.524 / 210.294 | 11 auth-missing, 1 health-missing |
+| Mismatched health enforcement epoch | 268.061 / 268.776 | 348.296 / 349.018 | 12 epoch/scope rejections |
+
+The supervisor-local -60-second wall fault latched denial even after restoring
+its clock view; the observation continued beyond the original authorization
+expiry. Neither host time nor AA/TLS clocks were changed. Original successful
+authorization-map writes retained exactly the signed deadline in every case;
+invalid authority never extended it. Fresh authority in a new session restored
+both TCP modes in all nine cases (195 recovered echoes total).
+
+Restart retained unchanged nonzero maps through actual kernel health expiry
+before a denied ownership handoff. The previous, still-unexpired Java envelope
+was rejected 551.524 ms before its original authorization deadline, then fresh
+signed authority was required. The epoch counter was observed 487.406 ms before
+heartbeat expiry, isolating epoch rejection from ordinary timeout. High-water
+repair used the fixture's trusted pre-fault snapshot; this is explicitly **not
+independently protected AA rollback resistance** or an external monotonic anchor.
+
+A separate read-only reviewer independently inspected implementation, all nine
+packet/application evidence sets and lifecycle state. It correlated 92–141
+successful echoes per case and found no protected client requests at the
+resource after each completed-denial/restart-health bound in the original
+observation window. Public directional IPv4 egress was ESP-only. Every labeled
+underlay probe was seen on transit, incremented nft DROP once, and was absent
+at the resource. Every case preserved both TC identities and exact nft
+interlocks. All 90 timestamped captures reported zero drops; all namespace,
+pin, container and volume cleanup checks passed. Raw evidence remains local,
+with directories mode 0700 and files mode 0600; it is not committed.
+
+Independent P1.4 scoped review is **PASS with no HIGH/CRITICAL findings**. The
+prior graceful-exit LOW and the three pre-run acceptance gaps (live baseline,
+physical TC rejection, pre-expiry epoch proof) are resolved. All 284 Python
+regressions and 18 Maven native-access tests passed; Java builds stayed in
+scratch and the user's `target/` changes were preserved.
+
+Host-audit limitation: one initial aggregate read-only comparison differed
+before its after-snapshot was retained; its cause is unknown. Three subsequently
+saved comparisons match the recorded namespace, all 132 raw route rows and
+interface-address configuration. The reviewed commands contain no host
+network-write operation and isolation is unchanged. These later matches do not
+reconstruct the unretained difference or prove continuous host-state immutability.
+No privileged rerun was performed to replace that missing historical evidence.
+
+**Actual reboot freshness remains BLOCKED.** QEMU/KVM and registered existing
+lab VMs were found, but no disposable reboot target was identified or authorized.
+No VM or host was rebooted; neither supervisor restart nor modeled boot-ID tests
+are substituted for reboot qualification. P0 and prior P1 milestones remain
+preserved. Overall P1 stays PARTIAL, production security acceptance stays
+BLOCKED, and no website or Cloudflare changes are authorized by this milestone.
