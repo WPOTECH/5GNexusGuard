@@ -554,3 +554,104 @@ No VM or host was rebooted; neither supervisor restart nor modeled boot-ID tests
 are substituted for reboot qualification. P0 and prior P1 milestones remain
 preserved. Overall P1 stays PARTIAL, production security acceptance stays
 BLOCKED, and no website or Cloudflare changes are authorized by this milestone.
+
+## P1.4 actual guest reboot: scoped packet qualification
+
+The approved disposable KVM guest completed an actual Linux reboot using only
+local assets. Baseline `08998312aad0d9dc5f75661faec37b5d956c5cac` and production
+enforcement sources remain unchanged. QMP confirmed four vCPUs and 6 GiB RAM;
+`-nic none` and a guest loopback-only assertion excluded a network adapter.
+Only a new private virtual disk and private Unix management sockets were used.
+Existing libvirt VMs, including powered-off pfSense, were not operated.
+
+The staged local `7.0.0-38-generic` kernel SHA-256 was
+`9f55ef7253055a9cf68f8a04323c93dead2fca617386d842fbde9ca7b178b27e`.
+The reviewed Docker image was imported offline inside the guest, retaining the
+existing packet harness's isolation and capability set. Persistent host disk
+space was insufficient for the disposable disk, so it remains in the private
+`/tmp/mesh-reboot-vm-lab-03` directory. This survives a guest reboot, but is not
+storage that survives a Polaris reboot. Compact evidence was recovered to
+private persistent scratch storage; no captures, credentials or VM images are
+committed. An initial pre-authorization bootstrap failed because the minimal
+guest's Docker client selected `/var/run/docker.sock`; explicitly selecting
+`unix:///run/docker.sock` corrected it. The same guest disk was retained.
+
+Observed qualification:
+
+| Check | Actual result |
+|---|---|
+| Kernel boot identities | `ac1c1334-7f62-46bd-9b56-21d362772c5d` → `b54afcde-0d98-4886-9fa5-7dc63b6a86d0` |
+| Authorized TCP before reboot | 24 established-mode and 19 new-connection echoes |
+| Retained state | Same admission journal, AA high-water and SQLite checkpoint hashes; retained signing/TLS identities |
+| Before fresh BPF installation after reboot | No old gate maps/programs; new authorization and health entries zero |
+| Old envelope and recovery-message replay | Both DENIED; generation stayed 2, unpublished, no admission deadline |
+| Stale-authority packet probes | 3 denied attempts per TCP mode; 12 ingress `auth_missing`/SYN drops including pregrant probes |
+| Fresh authenticated recovery | AA recovery and new authorization advanced generation 1→2 and epoch 1→3; native signed recovery/authorization advanced generation 2→4 in a new session |
+| Recovered TCP | 23 established-mode and 18 new-connection echoes |
+| New kernel enforcement epoch | `14693578472637895514` → `11746358507351119182`; matching authorization/health bindings per boot |
+| Physical evidence | 20 captures, zero kernel drops; 259/252 WireGuard transit packets before/after, ESP-only public IPv4 egress, protected-path SYN matches |
+| Interlocks and bypass | Both TC hooks and scoped nftables rules intact; independent forward/reverse counters increased; direct underlay probe dropped each phase |
+| Cleanup | Six stages PASS, namespaces and pins empty; owned QEMU exited 0 |
+
+Original TCP sockets do not survive a guest reboot. “Established-mode” after
+reboot means a newly created persistent connection, not continuation of an old
+socket. Old authority also had obsolete BOOTTIME/session bindings: this test
+demonstrates rejection across an actual reboot, without isolating boot-ID
+validation from every other freshness check.
+
+The preboot map-write audit contains no successful permit clearing after grant
+and no extension of the original authorization deadline, 46.179487209 seconds
+BOOTTIME. Reboot was requested at 44.183070340 seconds; the kernel logged restart
+at 44.646682 seconds and machine restart at 44.648622 seconds. The last recorded
+health deadline was 44.478629917 seconds, so it elapsed during kernel shutdown.
+This establishes retained nonzero entries and a live authorization lifetime at
+reset; it does not claim a live health permit at the physical reset instant.
+
+**The original automation result remains FAIL**, separately from the offline
+packet audit PASS. Virtio evidence export timed out. Evidence was recovered from
+a stopped-disk copy after replaying the copy's filesystem journal; the original
+disk was preserved. The control writer now handles partial device writes, with
+a focused short-write regression, but that transport correction has not been
+retested in a VM. No privileged packet test was repeated to fix reporting.
+
+Saved host snapshots are **not identical**: one Docker veth disappeared and two
+appeared, with three removed and six added kernel IPv6 routes on those exact
+interfaces. Existing interface configuration, host boot ID, rules and libvirt
+VM states were unchanged. Read-only Docker events corroborate concurrent bridge
+connect/disconnect activity. The lab issued no host network write and had no
+NIC; nevertheless exact host-wide invariance is not reported as PASS, and the
+runner's conservative failure is preserved. Full operational automation remains
+partial pending successful export and host-audit completion in a quiet window.
+
+Reproduce offline preparation and audit using the scripts in `reboot_vm`:
+
+```sh
+# VM launch/reboot requires separate explicit operator approval.
+python3 scripts/ipsec-dual/reboot_vm/build_guest.py \
+  --directory /tmp/mesh-reboot-vm-lab-NEW --java "$JAVA_STAGE"
+python3 scripts/ipsec-dual/reboot_vm/run_guest.py --parent-approved \
+  --directory /tmp/mesh-reboot-vm-lab-NEW
+# Read-only audit; no Docker, VM, network, or map writes:
+python3 -B scripts/ipsec-dual/reboot_vm/audit_reboot.py "$PRIVATE_EVIDENCE"
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s scripts/ipsec-dual -p test_reboot_vm.py -v
+```
+
+The offline audit binds worker records, map-write audit, actual captures,
+TC/nftables snapshots, retained-state hashes and cleanup evidence. It emits
+packet qualification separately from the original runner status and host
+snapshot comparison. Baseline regressions passed: 284 Python tests (14 skipped)
+and 18 Maven native-access tests; five new offline acceptance tests passed.
+Java builds remained outside the checkout's generated `target/` files.
+
+This does not implement or qualify an independently protected AA whole-store
+rollback anchor. Production admission remains disabled; production security
+acceptance and website updates remain blocked.
+
+Independent review of the executed reboot artifacts is **PASS for scoped reboot
+freshness and packet enforcement, with no remaining HIGH/CRITICAL findings**.
+The reviewer independently parsed the captures (20/19 common protected SYN
+flows before/after) and corroborated retained-state freshness, denied replay,
+fresh signed recovery, BPF initialization and cleanup. This sign-off preserves
+the original runner FAIL and operational PARTIAL status; it does not assert
+exact host snapshot invariance or production security acceptance.
