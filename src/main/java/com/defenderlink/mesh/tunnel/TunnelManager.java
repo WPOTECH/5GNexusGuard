@@ -143,7 +143,7 @@ public class TunnelManager {
                         identity.getNodeId(),
                         localPubKey,
                         localIp,
-                        publicEndpoint,
+                        advertisedEndpoint(publicEndpoint, listenPortStart, port),
                         sig
                 );
         TunnelNegotiationResource.NegotiateResponse negotiateResp =
@@ -156,9 +156,10 @@ public class TunnelManager {
 
         // Bring up the connector-side WireGuard interface
         String ownerTunnelIpOnly = negotiateResp.ownerTunnelIp().split("/")[0];
+        String ownerEndpoint = validatedEndpoint(negotiateResp.ownerEndpoint());
         createOwnedInterface(ifName);
         String configPath = writeConfig(ifName, localPrivKey, port,
-                negotiateResp.ownerWgPubkey(), negotiateResp.ownerEndpoint(), ownerTunnelIpOnly);
+                negotiateResp.ownerWgPubkey(), ownerEndpoint, ownerTunnelIpOnly);
         exec("ip", "addr", "add", localIp, "dev", ifName);
         exec("ip", "link", "set", "mtu", String.valueOf(mtu), "dev", ifName);
         exec("ip", "link", "set", "up", "dev", ifName);
@@ -316,6 +317,34 @@ public class TunnelManager {
         int last = Integer.parseInt(octets[3]);
         octets[3] = String.valueOf(last == 1 ? 2 : 1);
         return String.join(".", octets) + "/30";
+    }
+
+    static String advertisedEndpoint(String configuredEndpoint, int firstListenPort, int listenPort) {
+        if (firstListenPort < 1 || firstListenPort > 65535 || listenPort < firstListenPort || listenPort > 65535)
+            throw new IllegalArgumentException("Invalid WireGuard endpoint or allocated port");
+        java.net.URI endpoint = endpointUri(configuredEndpoint);
+        long advertisedPort = (long) endpoint.getPort() + listenPort - firstListenPort;
+        if (advertisedPort > 65535) throw new IllegalArgumentException("Advertised WireGuard port range exhausted");
+        // Preserve an explicitly mapped first public port. Further services use
+        // a contiguous advertised range; forwarding that range is operator-owned.
+        return configuredEndpoint.substring(0, configuredEndpoint.lastIndexOf(':') + 1) + advertisedPort;
+    }
+
+    static String validatedEndpoint(String advertisedEndpoint) {
+        endpointUri(advertisedEndpoint);
+        return advertisedEndpoint; // Owner's advertised (possibly mapped) port is authoritative.
+    }
+
+    private static java.net.URI endpointUri(String configuredEndpoint) {
+        if (configuredEndpoint == null) throw new IllegalArgumentException("Explicit WireGuard endpoint required");
+        final java.net.URI endpoint;
+        try { endpoint = java.net.URI.create("udp://" + configuredEndpoint); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Invalid WireGuard endpoint"); }
+        if (endpoint.getHost() == null || endpoint.getPort() < 1 || endpoint.getPort() > 65535
+                || endpoint.getRawUserInfo() != null || !endpoint.getRawPath().isEmpty()
+                || endpoint.getRawQuery() != null || endpoint.getRawFragment() != null)
+            throw new IllegalArgumentException("Explicit WireGuard host and port required");
+        return endpoint;
     }
 
     static String interfaceName(String prefix, String role, String service, String localNode, String peerNode) {

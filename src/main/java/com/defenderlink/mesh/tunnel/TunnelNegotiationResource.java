@@ -27,6 +27,9 @@ public class TunnelNegotiationResource {
     @ConfigProperty(name = "mesh.node.public-endpoint", defaultValue = "127.0.0.1:51820")
     String publicEndpoint;
 
+    @ConfigProperty(name = "mesh.tunnel.listen-port-start", defaultValue = "51820")
+    int listenPortStart = 51820;
+
     public record NegotiateRequest(
             String serviceId,
             String initiatorNodeId,
@@ -94,7 +97,7 @@ public class TunnelNegotiationResource {
             return Response.ok(new NegotiateResponse(
                     rt.wgPubkey(),
                     rt.tunnelIp(),
-                    publicEndpoint,
+                    TunnelManager.advertisedEndpoint(publicEndpoint, listenPortStart, rt.listenPort()),
                     rt.listenPort(),
                     rt.egressPort()
             )).build();
