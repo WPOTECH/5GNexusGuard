@@ -24,12 +24,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * For each service THIS node exposes:
  * 1. Listens on the WireGuard tunnel interface for incoming connections
- * 2. Validates the connection came through a legitimate tunnel
+ * 2. Uses the explicit listener established by tunnel negotiation
  * 3. Forwards traffic to the actual local service (e.g. 127.0.0.1:5432)
  *
- * This runs automatically for all services this node has exposed via the ledger.
- * When a new SERVICE_EXPOSE entry appears in the ledger for this node,
- * the egress proxy starts listening.
+ * Listeners open only after explicit tunnel negotiation. Ledger publication
+ * alone does not authorize opening a plaintext underlay listener.
  */
 @ApplicationScoped
 public class EgressProxy {
@@ -48,65 +47,26 @@ public class EgressProxy {
 
     private final Map<String, EgressBinding> bindings = new ConcurrentHashMap<>();
 
-    /**
-     * Periodically check for new services this node exposes
-     * and start egress proxies for them.
-     */
+    /** Ledger publication must never create an unauthenticated plaintext listener. */
     @Scheduled(every = "5s")
     void syncEgressBindings() {
         if (accessMode.nativeDual()) return;
-        var myServices = ledger.getServicesByOwner(identity.getNodeId());
-
-        // Start legacy 0.0.0.0 egress for services not yet tunnel-connected
-        for (ServiceRecord svc : myServices) {
-            if (!svc.active()) continue;
-            if (bindings.containsKey(svc.serviceId())) continue;
-            startEgress(svc);
-        }
-
-        // Only stop egress for plain serviceId keys (not tunnel-specific keys)
+        // Withdraw only obsolete listeners owned by this proxy instance. Keep
+        // negotiated address-bound listeners; opening them requires TunnelManager.
         bindings.entrySet().removeIf(entry -> {
-            String key = entry.getKey();
-            // Skip tunnel-specific bindings (they contain ':' + IP)
-            if (key.contains(":")) return false;
-            var svc = ledger.getService(key);
-            if (svc.isEmpty() || !svc.get().active()) {
-                entry.getValue().active = false;
-                try { entry.getValue().serverSocket.close(); } catch (Exception ignored) {}
-                log.info("Stopped egress for '{}'", key);
+            EgressBinding binding = entry.getValue();
+            var address = binding.serverSocket.getInetAddress();
+            if (address != null && !address.isAnyLocalAddress()) return false;
+            binding.active = false;
+            try {
+                binding.serverSocket.close();
+                log.info("Closed obsolete wildcard egress for '{}'", binding.serviceId);
                 return true;
+            } catch (IOException failed) {
+                log.warn("Wildcard egress close failed for '{}'; retaining cleanup tracking", binding.serviceId);
+                return false;
             }
-            return false;
         });
-    }
-
-    private void startEgress(ServiceRecord service) {
-        accessMode.requireStandard();
-        String[] bindParts = service.localBind().split(":");
-        String localHost = bindParts.length > 1 ? bindParts[0] : "127.0.0.1";
-        int localPort = Integer.parseInt(bindParts[bindParts.length - 1]);
-
-        // Egress listens on the service's assigned port on 0.0.0.0
-        // (traffic arrives from WireGuard tunnel interface)
-        int listenPort = service.assignedPort();
-
-        try {
-            ServerSocket serverSocket = new ServerSocket(listenPort);
-            EgressBinding binding = new EgressBinding(
-                    service.serviceId(), listenPort, localHost, localPort, serverSocket, true);
-            bindings.put(service.serviceId(), binding);
-
-            Thread.ofVirtual()
-                    .name("egress-" + service.serviceId())
-                    .start(() -> acceptLoop(binding));
-
-            log.info("Egress active: :{} → {}:{} for service '{}'",
-                    listenPort, localHost, localPort, service.serviceId());
-
-        } catch (IOException e) {
-            log.error("Failed to start egress for '{}' on port {}",
-                    service.serviceId(), listenPort, e);
-        }
     }
 
     private void stopEgress(String serviceId) {
@@ -122,6 +82,7 @@ public class EgressProxy {
         while (binding.active) {
             try {
                 Socket inbound = binding.serverSocket.accept();
+                if (!binding.active) { inbound.close(); break; }
                 Thread.ofVirtual()
                         .name("egress-conn-" + binding.serviceId)
                         .start(() -> forwardToLocal(inbound, binding));
@@ -136,6 +97,7 @@ public class EgressProxy {
         while (b.active) {
             try {
                 Socket inbound = b.serverSocket.accept();
+                if (!b.active) { inbound.close(); break; }
                 Thread.ofVirtual()
                         .name("egress-conn-" + b.serviceId)
                         .start(() -> forwardToLocal(inbound, b));
@@ -202,12 +164,22 @@ public class EgressProxy {
 
     /**
      * Called from TunnelManager.createOwnerSideTunnel() after WG interface is up.
-     * Binds egress ONLY on the tunnel interface IP so only WG traffic can reach it.
+     * Binds to the negotiated tunnel address. Ingress-device enforcement is a
+     * separate kernel routing/firewall property, not implied by an IP bind.
      */
     public int startEgressOnInterface(String tunnelIp, int egressPort,
                                       String svcHost, int svcPort, String serviceId) {
 
         accessMode.requireStandard();
+        if (tunnelIp == null || tunnelIp.isBlank())
+            throw new IllegalArgumentException("Explicit negotiated tunnel address required");
+        final java.net.InetAddress address;
+        try { address = java.net.InetAddress.getByName(tunnelIp); }
+        catch (java.net.UnknownHostException invalid) {
+            throw new IllegalArgumentException("Invalid negotiated tunnel address");
+        }
+        if (address.isAnyLocalAddress())
+            throw new IllegalArgumentException("Wildcard egress binding is forbidden");
         String key = serviceId + ":" + tunnelIp;
         if (bindings.containsKey(key)) {
             log.info("Egress already active for svc='{}' on {}", serviceId, tunnelIp);
@@ -217,7 +189,7 @@ public class EgressProxy {
         try {
             ServerSocket ss = new ServerSocket();
             ss.setReuseAddress(true);
-            ss.bind(new java.net.InetSocketAddress(tunnelIp, egressPort));
+            ss.bind(new java.net.InetSocketAddress(address, egressPort));
 
             EgressBinding b = new EgressBinding(serviceId, egressPort, svcHost, svcPort, ss, true);
             bindings.put(key, b);
