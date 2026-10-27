@@ -1,22 +1,35 @@
 [Unit]
-Description=5GNexusGuard - Decentralized Zero Trust Overlay
-Documentation=https://github.com/wpospace/defenderlink-mesh
+Description=5GNexusGuard Linux prototype node
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-EnvironmentFile=-/etc/defenderlink/defenderlink.conf
-ExecStart=/opt/defenderlink/bin/defenderlink-mesh
+User=defenderlink
+Group=defenderlink
+UMask=0077
+StateDirectory=defenderlink
+StateDirectoryMode=0700
+RuntimeDirectory=defenderlink
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/python3 /opt/defenderlink/libexec/runtime.py run
 Restart=on-failure
-RestartSec=5s
+RestartSec=3s
+TimeoutStopSec=30s
+KillMode=control-group
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/etc/wireguard/defenderlink
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=defenderlink
-NoNewPrivileges=false
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
