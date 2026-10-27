@@ -58,7 +58,8 @@ python3 scripts/ipsec-dual/reboot_vm/export_retest.py run --parent-approved \
 The STANDARD check runs two real application JVMs with separate private data and
 network namespaces in the reviewed Docker image, real gossip/registration,
 ledger service authorization, real `/usr/bin/wg`, protected TCP, distinct-service
-interface checks and disconnect cleanup. It has not yet run. The export test
+interface checks and disconnect cleanup. Its original positive-only version ran
+and failed; the expanded checks below require fresh approval. The export test
 boots only a private copy of the stopped P1 disposable disk, requests status and
 export, verifies retained artifact hashes and shuts down its own VM. It does
 not rerun P1 authorization/packet cases or modify the original evidence.
@@ -75,7 +76,7 @@ required for real interoperability.
 Validated so far: offline package build and extraction, dependency/configuration
 diagnostics, package/unit syntax and systemd verification, 292 Python security
 regressions (14 skipped), five deployment negative controls, and 33 Java tests.
-Privileged installation, real service lifecycle, STANDARD packets, native
+Privileged installation, real service lifecycle, successful STANDARD packet qualification, native
 service integration, performance comparison and recovery qualification remain
 outstanding. This milestone does not mark P2 working or P1 production-accepted.
 
@@ -84,3 +85,62 @@ scope interface naming, refusal to delete an existing name, kernel index/alias
 ownership checks, and retained failed-teardown tracking. These have not yet
 received packet sign-off. Ownership records remain process-local; crash
 reconciliation and partial-creation recovery are outstanding operational gates.
+
+## P2 execution at checkpoint 52d670c
+
+The two approved commands were executed once, in order. No privileged retest
+was performed after the first mandatory STANDARD failure.
+
+**Evidence export: PASS.** The retained-state, NIC-free guest exported 538,989
+bytes in 216,666,900 ns. All 81 immutable original artifacts matched SHA-256;
+only the two reviewed startup logs were excluded. All 83 original reboot-test
+artifacts in persistent evidence were independently verified unchanged. Guest
+boot count was 3, boot ID `11a4725c-90c1-4c08-be70-fc5b1f65f859`; owned QEMU
+exited 0. No P1 authorization/packet case was rerun. Raw snapshots differ in
+address-lifetime countdowns; normalized host configuration was unchanged. The
+original receipt's `raw_host_snapshots_equal=true` actually represented that
+normalized comparison. The receipt is preserved; future reporting separates
+raw equality from configuration equality and gates acceptance on the latter.
+
+**STANDARD: FAIL.** Both real JVMs started, gossip discovery and both-node
+registration passed, and `prototype-a` delivered its protected echo.
+`prototype-b` then timed out. Both owner interfaces were distinct, and both
+proxy listeners were established; interface-name collision was not this
+observed failure. Both namespaces and the owned container were removed. Host
+configuration was unchanged. Normal disconnect and denial were not reached.
+
+Source and a nonprivileged authenticated-negotiation regression reproduced the
+endpoint defect: a second owner listener allocated port 51821 but its response
+still advertised the base endpoint port 51820. Initiator requests likewise
+used the fixed base endpoint. Actual runtime WG endpoint state and packet
+captures were not retained by that original driver, so the diagnosis is
+source-backed and reproduced in regression, not an independent UDP trace.
+
+The correction advances advertised ports with allocation while preserving an
+explicitly configured first public port. Additional services assume a contiguous
+forwarded public-port range; NAT forwarding is not qualified here. The owner
+is authoritative for its advertised endpoint, which the connector validates
+and preserves. No negotiation schema, authorization decision, native gate,
+capability or protocol changes. The regression failed before correction and
+all 37 focused Java tests passed afterward, including the existing native V2,
+identity-permission and STANDARD lifecycle regressions.
+
+The original STANDARD driver could not prove the requested authorization denial,
+physical packet path, or post-disconnect residual denial. Its prepared replacement
+requires disallowed-service membership rejection, an actual direct-underlay echo
+attempt, seven zero-drop captures, matching TCP SYN/payload at both WG interfaces,
+encrypted WG transport on the management link, kernel endpoints/listen ports and
+handshakes, ownership/index records, and existing/new TCP denial after both
+explicit disconnect APIs complete. It records the initial disconnect request
+and successful in-flight attempts separately; no maximum revocation window is
+claimed. The wrapper checks mandatory evidence, retains diagnostics even on
+failure, and verifies owned cleanup and normalized host configuration.
+
+These prepared checks have offline acceptance/syntax coverage only and require
+fresh approval before execution. The original runtime FAIL is not converted
+to PASS by the correction or by those tests. Independent review found no
+remaining HIGH/CRITICAL issue in these corrections or the prepared acceptance
+code. Existing STANDARD wildcard egress is an unresolved source concern to
+exercise with the underlay-denial test; no exploit or denial result is claimed
+from this run. Systemd installation/service recovery remain unperformed, and
+P2 remains PARTIAL with production acceptance blocked.

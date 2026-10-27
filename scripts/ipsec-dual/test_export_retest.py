@@ -3,10 +3,22 @@ import hashlib
 import io
 import tarfile
 import unittest
-from reboot_vm.export_retest import verify_export
+from reboot_vm.export_retest import verify_export, export_complete
 
 
 class ExportRetestTests(unittest.TestCase):
+    def test_export_pass_requires_evidence_shutdown_and_host_configuration(self):
+        good=dict(export='PASS',matched_original_artifacts=81,guest_stopped=True,
+                  qemu_exit_code=0,host_configuration_unchanged=True,
+                  raw_host_snapshots_equal=False)
+        self.assertTrue(export_complete(good))
+        for edit in ({'matched_original_artifacts':0},{'host_configuration_unchanged':False},
+                     {'guest_stopped':False},{'qemu_exit_code':-9},{'shutdown_error':'failed'}):
+            self.assertFalse(export_complete(dict(good,**edit)))
+        for field in ('matched_original_artifacts','host_configuration_unchanged','guest_stopped','qemu_exit_code','export'):
+            missing=dict(good);missing.pop(field)
+            self.assertFalse(export_complete(missing),field)
+
     def archive(self,files):
         memory=io.BytesIO()
         with tarfile.open(fileobj=memory,mode='w:gz') as out:

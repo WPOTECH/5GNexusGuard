@@ -5,6 +5,10 @@ import json
 import os
 from pathlib import Path
 import secrets
+import hashlib
+import sys
+
+from standard_evidence import qualification_complete
 import subprocess
 
 IMAGE='dl-ipsec-isolated-evidence:probe'
@@ -28,18 +32,35 @@ def main():
            '--mount','type=tmpfs,dst=/lab/private,tmpfs-mode=0700',
            '-w','/lab/src',IMAGE,'python3','-B','/lab/src/scripts/operational/standard_packet.py']
     (evidence/'invocation.local.json').write_text(json.dumps(argv,indent=2))
-    created=False
+    sys.path.insert(0,str(repo/'scripts/ipsec-dual/reboot_vm'))
+    from run_guest import host_snapshot, configured_network
+    before=host_snapshot();(evidence/'host-before.local.json').write_text(json.dumps(before,indent=2))
+    inputs={'git_head':subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip(),
+            'jar_sha256':hashlib.sha256(jar.read_bytes()).hexdigest(),
+            'source_sha256':{str(path.relative_to(repo)):hashlib.sha256(path.read_bytes()).hexdigest()
+                             for path in (repo/'scripts/operational').glob('*.py')}}
+    (evidence/'build-input.local.json').write_text(json.dumps(inputs,indent=2))
+    created=False;copied=False
     try:
         subprocess.run(argv,check=True,stdout=subprocess.DEVNULL);created=True
         with (evidence/'container.local.log').open('wb') as log:run=subprocess.run(['docker','start','-a',name],stdout=log,stderr=log,timeout=240)
         subprocess.run(['docker','cp',name+':/lab/evidence/.',str(evidence)],check=True,capture_output=True)
+        copied=True
         state=json.loads(subprocess.check_output(['docker','inspect','--format','{{json .State}}',name],text=True))
         if run.returncode or state['ExitCode'] or state.get('OOMKilled'):raise RuntimeError('STANDARD packet test failed; inspect private evidence')
         report=json.loads((evidence/'standard-result.local.json').read_text())
-        if report['status']!='PASS' or not report['cleanup'] or any(r['status']!='PASS' for r in report['cleanup']):raise RuntimeError('STANDARD qualification incomplete')
+        if report['status']!='PASS' or not qualification_complete(report):raise RuntimeError('STANDARD qualification incomplete')
     finally:
         if created:
+            if not copied:
+                recovered=subprocess.run(['docker','cp',name+':/lab/evidence/.',str(evidence)],capture_output=True)
+                (evidence/'evidence-recovery.local.stderr').write_bytes(recovered.stderr)
             subprocess.run(['docker','rm','-fv',name],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        after=host_snapshot();(evidence/'host-after.local.json').write_text(json.dumps(after,indent=2))
+        same=configured_network(before)==configured_network(after)
+        (evidence/'host-comparison.local.json').write_text(json.dumps({'raw_host_snapshots_equal':before==after,
+                                                                      'host_configuration_unchanged':same}))
+    if not same:raise RuntimeError('host configuration snapshots differed; preserve and review evidence')
     print(json.dumps({'P2_STANDARD_COMPATIBILITY':'PASS'}))
 
 

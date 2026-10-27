@@ -101,6 +101,12 @@ def verify_export(archive_bytes,expected):
     return checked
 
 
+def export_complete(report):
+    return (report.get('export')=='PASS' and report.get('matched_original_artifacts',0)>0 and
+            report.get('guest_stopped') is True and report.get('qemu_exit_code')==0 and
+            not report.get('shutdown_error') and report.get('host_configuration_unchanged') is True)
+
+
 def execute(directory):
     meta=json.loads((directory/'export-manifest.local.json').read_text())
     if meta['directory']!=str(directory) or meta['purpose']!='EXPORT_ONLY_NO_PACKET_CASES':raise ValueError('wrong lab')
@@ -152,8 +158,9 @@ def execute(directory):
         report['guest_stopped']=process is not None and process.poll() is not None
         report['qemu_exit_code']=process.returncode if process is not None else None
         after=host_snapshot();(directory/'host-after.local.json').write_text(json.dumps(after,indent=2))
-        report['raw_host_snapshots_equal']=configured_network(before)==configured_network(after)
-        if report.get('export')=='PASS' and report['guest_stopped'] and report['qemu_exit_code']==0 and not report.get('shutdown_error'):
+        report['raw_host_snapshots_equal']=before==after
+        report['host_configuration_unchanged']=configured_network(before)==configured_network(after)
+        if export_complete(report):
             report['status']='PASS'
         (directory/'export-result.local.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
     if report['status']!='PASS':raise RuntimeError('export operational retest incomplete')
