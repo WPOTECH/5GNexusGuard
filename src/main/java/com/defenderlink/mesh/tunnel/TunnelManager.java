@@ -91,6 +91,8 @@ public class TunnelManager {
     String publicEndpoint;
 
     private final Map<String, ActiveTunnel> tunnels = new ConcurrentHashMap<>();
+    final String interfaceOwner = "5gnexus-" + java.util.UUID.randomUUID();
+    final Map<String, Integer> ownedInterfaces = new ConcurrentHashMap<>();
     private final AtomicInteger subnetCounter = new AtomicInteger(1);
     private final AtomicInteger portCounter = new AtomicInteger(0);
 
@@ -103,11 +105,12 @@ public class TunnelManager {
      * WireGuard public key. We just configure WireGuard directly.
      */
 
-    public ActiveTunnel ensureTunnel(String serviceId) throws Exception {
+    public synchronized ActiveTunnel ensureTunnel(String serviceId) throws Exception {
         accessMode.requireStandard();
         String connKey = "conn:" + serviceId;
         ActiveTunnel existing = tunnels.get(connKey);
         if (existing != null && existing.isUp()) return existing;
+        if (existing != null) throw new IllegalStateException("Previous tunnel cleanup remains pending");
 
         LedgerStore.ServiceRecord svc = ledger.getService(serviceId)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown service: " + serviceId));
@@ -122,7 +125,7 @@ public class TunnelManager {
         int subnet      = subnetCounter.getAndIncrement();
         String localIp  = subnetPrefix + "." + subnet + ".1/30";
         int port        = listenPortStart + portCounter.getAndIncrement();
-        String ifName   = ifPrefix + "-c-" + sanitize(serviceId, 8);
+        String ifName   = interfaceName(ifPrefix, "c", serviceId, identity.getNodeId(), svc.ownerNodeId());
 
         // Sign the negotiate payload
         String signable = serviceId + identity.getNodeId() + localPubKey;
@@ -153,11 +156,9 @@ public class TunnelManager {
 
         // Bring up the connector-side WireGuard interface
         String ownerTunnelIpOnly = negotiateResp.ownerTunnelIp().split("/")[0];
+        createOwnedInterface(ifName);
         String configPath = writeConfig(ifName, localPrivKey, port,
                 negotiateResp.ownerWgPubkey(), negotiateResp.ownerEndpoint(), ownerTunnelIpOnly);
-
-        try { exec("ip", "link", "delete", "dev", ifName); } catch (Exception ignored) {}
-        exec("ip", "link", "add", "dev", ifName, "type", "wireguard");
         exec("ip", "addr", "add", localIp, "dev", ifName);
         exec("ip", "link", "set", "mtu", String.valueOf(mtu), "dev", ifName);
         exec("ip", "link", "set", "up", "dev", ifName);
@@ -182,16 +183,18 @@ public class TunnelManager {
     /**
      * Tear down a specific service tunnel.
      */
-    public void destroyTunnel(String serviceId) {
-        ActiveTunnel tunnel = tunnels.remove("conn:" + serviceId);
+    public synchronized void destroyTunnel(String serviceId) {
+        ActiveTunnel tunnel = tunnels.get("conn:" + serviceId);
         if (tunnel == null) return;
 
         try {
-            exec("ip", "link", "set", "down", "dev", tunnel.ifName);
-            exec("ip", "link", "delete", "dev", tunnel.ifName);
+            deleteOwnedInterface(tunnel.ifName);
+            tunnels.remove("conn:" + serviceId, tunnel);
             log.info("Destroyed tunnel {} for service '{}'", tunnel.ifName, serviceId);
         } catch (Exception e) {
-            log.warn("Failed to clean up tunnel {}: {}", tunnel.ifName, e.getMessage());
+            tunnel.setState(TunnelState.FAILED);
+            tunnel.setError("Owned interface cleanup pending");
+            log.warn("Failed to clean up owned tunnel {}; retaining failed tracking", tunnel.ifName);
         }
     }
 
@@ -208,7 +211,7 @@ public class TunnelManager {
 // Owner-side tunnel creation (called via TunnelNegotiationResource)
 // =========================================================================
 
-    public ReciprocatedTunnel createOwnerSideTunnel(
+    public synchronized ReciprocatedTunnel createOwnerSideTunnel(
             String serviceId,
             String initiatorNodeId,
             String initiatorWgPubkey,
@@ -220,6 +223,7 @@ public class TunnelManager {
         String ownerKey = "owner:" + serviceId + ":" + initiatorNodeId;
         ActiveTunnel existing = tunnels.get(ownerKey);
         if (existing != null) {
+            if (!existing.isUp()) throw new IllegalStateException("Previous owner tunnel cleanup remains pending");
             log.info("Owner-side tunnel already exists for svc='{}', reusing", serviceId);
             return new ReciprocatedTunnel(existing.ifName, existing.localPublicKey,
                     existing.localIp, existing.listenPort, existing.egressPort());
@@ -235,15 +239,13 @@ public class TunnelManager {
         String publicKey    = kp[1];
 
         int port   = listenPortStart + portCounter.getAndIncrement();
-        String ifName = ifPrefix + "-o-" + sanitize(serviceId, 8);
+        String ifName = interfaceName(ifPrefix, "o", serviceId, identity.getNodeId(), initiatorNodeId);
 
         // Write wg config and bring up interface
         String initiatorTunnelIpOnly = initiatorTunnelIp.split("/")[0];
+        createOwnedInterface(ifName);
         String configPath = writeConfig(ifName, privateKey, port,
                 initiatorWgPubkey, initiatorEndpoint, initiatorTunnelIpOnly);
-
-        try { exec("ip", "link", "delete", "dev", ifName); } catch (Exception ignored) {}
-        exec("ip", "link", "add", "dev", ifName, "type", "wireguard");
         exec("ip", "addr", "add", ownerTunnelIp, "dev", ifName);
         exec("ip", "link", "set", "mtu", String.valueOf(mtu), "dev", ifName);
         exec("ip", "link", "set", "up", "dev", ifName);
@@ -268,9 +270,9 @@ public class TunnelManager {
         return new ReciprocatedTunnel(ifName, publicKey, ownerTunnelIp, port, egressPort);
     }
 
-    public void destroyOwnerSideTunnel(String serviceId, String initiatorNodeId) {
+    public synchronized void destroyOwnerSideTunnel(String serviceId, String initiatorNodeId) {
         String ownerKey = "owner:" + serviceId + ":" + initiatorNodeId;
-        ActiveTunnel at = tunnels.remove(ownerKey);
+        ActiveTunnel at = tunnels.get(ownerKey);
         if (at == null) return;
 
         // Stop egress before removing the interface it's bound to
@@ -278,11 +280,13 @@ public class TunnelManager {
         egressProxy.stopEgressOnInterface(serviceId, tunnelIpOnly);
 
         try {
-            exec("ip", "link", "set", "down", "dev", at.ifName);
-            exec("ip", "link", "delete", "dev", at.ifName);
+            deleteOwnedInterface(at.ifName);
+            tunnels.remove(ownerKey, at);
             log.info("Destroyed owner-side tunnel: if={}", at.ifName);
         } catch (Exception e) {
-            log.warn("Interface removal failed for {}: {}", at.ifName, e.getMessage());
+            at.setState(TunnelState.FAILED);
+            at.setError("Owned interface cleanup pending");
+            log.warn("Interface removal failed for {}; retaining failed tracking", at.ifName);
         }
     }
 
@@ -314,12 +318,55 @@ public class TunnelManager {
         return String.join(".", octets) + "/30";
     }
 
-    /**
-     * Strip non-alphanumeric chars and truncate to maxLen for interface names.
-     */
-    private String sanitize(String s, int maxLen) {
-        String clean = s.replaceAll("[^a-z0-9]", "");
-        return clean.substring(0, Math.min(clean.length(), maxLen));
+    static String interfaceName(String prefix, String role, String service, String localNode, String peerNode) {
+        if (prefix == null || !prefix.matches("[A-Za-z][A-Za-z0-9]{0,3}")
+                || !("c".equals(role) || "o".equals(role)))
+            throw new IllegalArgumentException("Invalid WireGuard interface prefix or role");
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(
+                    (role + "\0" + service + "\0" + localNode + "\0" + peerNode)
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return prefix + "-" + role + "-" + java.util.HexFormat.of().formatHex(digest).substring(0, 12-prefix.length());
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    void createOwnedInterface(String name) throws Exception {
+        // Kernel EEXIST is a hard failure. Never delete/adopt a pre-existing name.
+        exec("ip", "link", "add", "dev", name, "type", "wireguard");
+        exec("ip", "link", "set", "dev", name, "alias", interfaceOwner);
+        var info = linkInfo(name);
+        if (info == null || !info.path("ifindex").isInt() || info.path("ifindex").asInt()<=0
+                || !interfaceOwner.equals(info.path("ifalias").asText()))
+            throw new IllegalStateException("Unable to establish interface ownership");
+        ownedInterfaces.put(name, info.path("ifindex").asInt());
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode linkInfo(String name) throws Exception {
+        var rows = new com.fasterxml.jackson.databind.ObjectMapper().readTree(execCapture("ip", "-j", "link", "show"));
+        if (!rows.isArray()) throw new IllegalStateException("Invalid kernel link response");
+        for (var row : rows) if (name.equals(row.path("ifname").asText())) return row;
+        return null;
+    }
+
+    void deleteOwnedInterface(String name) throws Exception {
+        var info = linkInfo(name);
+        if (info == null) { ownedInterfaces.remove(name); return; }
+        Integer index = ownedInterfaces.get(name);
+        if (index == null || index != info.path("ifindex").asInt()
+                || !interfaceOwner.equals(info.path("ifalias").asText()))
+            throw new IllegalStateException("Interface ownership changed; refusing deletion");
+        exec("ip", "link", "delete", "dev", name);
+        ownedInterfaces.remove(name);
+    }
+
+    @jakarta.annotation.PreDestroy
+    void shutdownOwnedTunnels() {
+        for (ActiveTunnel tunnel : java.util.List.copyOf(tunnels.values())) {
+            if (tunnel.role == TunnelRole.CONNECTOR) {
+                interceptProxy.stopIntercept(tunnel.serviceId);
+                destroyTunnel(tunnel.serviceId);
+            } else destroyOwnerSideTunnel(tunnel.serviceId, tunnel.peerNodeId);
+        }
     }
 
     /**
@@ -458,13 +505,13 @@ public class TunnelManager {
         }
     }
 
-    private void exec(String... cmd) throws Exception {
+    void exec(String... cmd) throws Exception {
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
         String out = new String(p.getInputStream().readAllBytes());
         if (p.waitFor() != 0) throw new RuntimeException(String.join(" ", cmd) + ": " + out);
     }
 
-    private String execCapture(String... cmd) throws Exception {
+    String execCapture(String... cmd) throws Exception {
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
         String output = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         if (p.waitFor() != 0) throw new IllegalStateException("WireGuard key command failed");
