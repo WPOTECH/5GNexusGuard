@@ -144,3 +144,57 @@ code. Existing STANDARD wildcard egress is an unresolved source concern to
 exercise with the underlay-denial test; no exploit or denial result is claimed
 from this run. Systemd installation/service recovery remain unperformed, and
 P2 remains PARTIAL with production acceptance blocked.
+
+## Corrected STANDARD retest at checkpoint 2d38a26
+
+One explicitly approved corrected run was executed. Discovery, registration,
+actual WG endpoints/listen ports and handshakes passed for both services on
+51820 and 51821. Both protected TCP request/reply paths passed. Seven zero-drop
+captures contain matching SYNs and application payload at both WG interfaces;
+each management capture contains 24 encrypted WG transport packets.
+
+**HIGH authorization bypass confirmed; runtime result FAIL.** The unauthorized
+client's signed negotiation was rejected by the owner with 403, but a separate
+plain TCP request to `192.0.2.2:15002` reached the protected application through
+legacy egress. The unauthorized request and reply appear on both management
+captures and application loopback, and on none of the WG captures. This is
+actual underlay delivery, not a hypothetical source finding.
+
+The root cause is `EgressProxy.syncEgressBindings()` automatically opening
+`new ServerSocket(service.assignedPort())`, an any-local listener, merely because
+a ledger service was active. That listener forwarded without checking the
+incoming caller's authorization or tunnel. The narrowly scoped correction
+removes automatic plaintext listener creation, withdraws obsolete owned
+wildcard listeners, rejects any-local bind arguments, and preserves only the
+explicit negotiated address-bound path. Failed closure remains tracked for
+retry. A seeded unbound-socket regression failed before correction; all six
+new proxy tests and all 37 existing focused Java tests passed afterward.
+These unit cases do not open wildcard host listeners. Native-mode guards and
+P0/P1 kernel enforcement remain unchanged.
+
+No packet retest followed the mandatory failure. Normal disconnect/residual
+checks were not reached. Cleanup itself passed: both JVMs exited on SIGTERM
+(143), the application exited -15, both owned namespaces were removed and the
+owned container was removed. Normalized host configuration stayed unchanged;
+raw address-lifetime countdowns advanced. Captures, original JAR/source
+fingerprints, reports and diagnostics are retained privately outside Git.
+
+The correction has source/regression independent review, not runtime sign-off.
+Withdrawing a listening socket is not revocation of already-forwarding sockets;
+the corrected product must be restarted and existing/new flow disconnect tests
+must still execute. An address bind is not ingress-interface enforcement, and
+arbitrary routed access to WG addresses is not qualified by this assigned-port
+test. No general underlay-denial or production-security PASS is claimed.
+
+The prepared next run also records route/address/interface snapshots, listening
+sockets, nftables rules and source-validation settings before/after relevant
+phases. Those are read-only observations; it refuses to autoload host modules
+and neither installs fallback routes nor changes enforcement to make a test
+pass. This evidence addition and the corrected JAR require fresh approval
+before another privileged run. P2 remains PARTIAL; runtime unauthorized/underlay
+denial remain FAIL until a newly approved real packet test demonstrates denial.
+
+Independent review confirmed the packet-level HIGH finding and approved the
+narrow source correction and read-only evidence additions with no introduced
+HIGH/CRITICAL findings. This is source/regression sign-off only; it does not
+close the recorded runtime failure or qualify routed underlay access.

@@ -20,6 +20,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--parent-approved',action='store_true');p.add_argument('--jar',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);args=p.parse_args()
     if not args.parent_approved:p.error('explicit operator approval required')
     if not Path('/sys/module/wireguard').is_dir():p.error('WireGuard must already be available; host module loading is not authorized by this runner')
+    if not Path('/sys/module/nf_tables').is_dir():p.error('nf_tables must already be available for read-only policy evidence; host module loading is not authorized')
     repo=Path(__file__).resolve().parents[2];evidence=args.evidence.resolve();jar=args.jar.resolve()
     if not jar.is_file() or evidence.exists() or not evidence.is_absolute() or evidence==repo or repo in evidence.parents:p.error('existing JAR and fresh private external evidence directory required')
     if subprocess.check_output(['docker','image','inspect',IMAGE,'--format','{{.Id}}'],text=True).strip()!=IMAGE_ID:p.error('reviewed image identity differs')

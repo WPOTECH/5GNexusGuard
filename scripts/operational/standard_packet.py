@@ -53,6 +53,18 @@ def main():
             (root/('wg-'+role+'-'+interface+'-'+field+'.local.txt')).write_text(value)
             result[field]=value
         return result
+    def network_state(phase):
+        for role in names:
+            observed={'monotonic_ns':time.monotonic_ns()}
+            for label,argv in (
+                    ('links',['ip','-j','-d','link','show']),
+                    ('addresses',['ip','-j','address','show']),
+                    ('routes',['ip','-j','route','show','table','all']),
+                    ('listeners',['ss','-H','-lnt']),
+                    ('nftables',['nft','-j','list','ruleset']),
+                    ('source_validation',['sysctl','-n','net.ipv4.conf.all.rp_filter','net.ipv4.conf.mgmt.rp_filter'])):
+                observed[label]=ns(role,argv)
+            (root/('network-'+phase+'-'+role+'.local.json')).write_text(json.dumps(observed,indent=2))
     def process(role,argv,label):
         with (root/(label+'.local.log')).open('wb') as log:
             p=subprocess.Popen(['ip','netns','exec',names[role],*argv],stdout=log,stderr=log)
@@ -89,6 +101,7 @@ def main():
         # A regular protected application, separate from both actual JVMs.
         server='import socketserver\nclass H(socketserver.BaseRequestHandler):\n def handle(self):\n  while True:\n   p=self.request.recv(4096)\n   if not p:break\n   self.request.sendall(p)\nsocketserver.ThreadingTCPServer(("127.0.0.1",18080),H).serve_forever()'
         process('b',['python3','-u','-c',server],'protected-application')
+        network_state('pre-authorization')
         connections={}
         # These IDs intentionally shared the old sanitizer's first eight chars.
         for service in ('prototype-a','prototype-b'):
@@ -123,6 +136,7 @@ def main():
                     raise RuntimeError('kernel interface identity/ownership label is absent or collided')
                 ownership[role][iface]=info['ifindex']
         report['interface_ownership']='PASS';report['kernel_link_identities']=ownership
+        network_state('authorized')
         # The client is registered but is not authorized for this service.
         denied='prototype-denied'
         exposed=api('b','/api/services/expose',{'serviceId':denied,'protocol':'tcp',
@@ -136,7 +150,9 @@ def main():
         # Allow the real scheduled egress reconciliation to run, then probe the
         # ordinary management underlay. No fallback route or policy is installed.
         time.sleep(6)
+        network_state('before-underlay-probe')
         assigned=exposed['assignedPort']
+        report['unauthorized_underlay_port']=assigned
         probe='import socket,json,sys\ns=None;ok=False\ntry:\n s=socket.create_connection(("192.0.2.2",int(sys.argv[1])),.5);s.settimeout(.5);p=b"5gnexus-p2-unauthorized";s.sendall(p);ok=s.recv(len(p))==p\nexcept OSError:pass\nfinally:\n if s:s.close()\nprint(json.dumps({"delivered":ok}))'
         report['unauthorized_underlay']=json.loads(ns('a',['python3','-c',probe,str(assigned)]))
         if report['unauthorized_underlay']['delivered']:
@@ -165,6 +181,7 @@ def main():
         if api('a','/api/tunnels') or api('b','/api/tunnels'):raise RuntimeError('disconnect left tracked tunnels')
         for role in names:
             if json.loads(ns(role,['ip','-j','link','show','type','wireguard'])):raise RuntimeError('disconnect left WireGuard interface')
+        network_state('after-disconnect')
         report['disconnect']='PASS'
     except BaseException as exc:
         if isinstance(exc,subprocess.CalledProcessError):
