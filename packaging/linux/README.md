@@ -247,3 +247,35 @@ to WG addresses, automatic owner cleanup from connector-only disconnect, or an
 instantaneous revocation bound. P2 remains PARTIAL pending package installation,
 systemd lifecycle and the other operational gates. Production security acceptance
 remains BLOCKED and website readiness remains NO.
+
+## Disposable-VM package installation attempt (2026-10-31)
+
+After STANDARD acceptance, the locally built Debian package was tested in a new
+Ubuntu 26.04 cloud-image KVM guest. The official image matched its HTTPS-published
+SHA-256. The guest used a fresh private overlay and cloud-init seed; QEMU user-mode
+networking had no host forwards, bridges or host firewall/routing changes. Only
+guest package dependencies were fetched. No existing VM or retained P1 disk was
+used. Private scripts, image verification, invocation, serial output and recovered
+guest evidence remain in `/home/wpotech/5gnexusguard-p2-install-vm-20261031-01`.
+
+**P2_LINUX_INSTALL=FAIL; P2_SERVICE_LIFECYCLE=BLOCKED.** The first mandatory
+installer invocation, `bash install.sh --package /mnt/p2/product.deb`, exited
+100 from `apt-get --no-download install` despite receiving an absolute local path:
+
+```text
+E: Internal Error, Pathname to install is not absolute 'defenderlink-mesh_1.0.0+p2.git3a193ba_amd64.deb'
+```
+
+The package SHA-256 was
+`e41ce2697cf0d6c5457b9c8f1bb7463dd5d61180838cda2d8dda232a64f372a3`.
+No service was installed or started; UID, capability, restart, crash recovery,
+identity retention, removal and reinstall checks were not reached. This is an
+installer-path failure, not evidence of service startup failure. No runtime
+retest, installer change, or security-enforcement change followed the mandatory
+failure. The prepared lifecycle checks are not passing results.
+
+Independent read-only review confirmed the failed installation, powered-off
+guest, QEMU exit 0 and absent owned PID, equal normalized host configuration and
+unchanged existing-VM list. Raw snapshot equality remains separate. STANDARD
+packet acceptance at `fd81255` stays PASS; overall P2 remains PARTIAL, production
+security acceptance BLOCKED and website readiness NO.
