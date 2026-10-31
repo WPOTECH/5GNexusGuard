@@ -198,3 +198,52 @@ Independent review confirmed the packet-level HIGH finding and approved the
 narrow source correction and read-only evidence additions with no introduced
 HIGH/CRITICAL findings. This is source/regression sign-off only; it does not
 close the recorded runtime failure or qualify routed underlay access.
+
+## P2 STANDARD capture lifecycle and packet acceptance (2026-10-31)
+
+The 2026-10-30 run remains FAIL: deleting WireGuard interfaces before stopping
+capture processes produced nonzero tcpdump exits. Its separately audited positive
+traffic and assigned-port denial observations were not full capture acceptance.
+
+The STANDARD harness now strictly finalizes each service's WireGuard captures
+before either explicit teardown API can remove an interface. A failed flush
+prevents normal teardown execution and fails acceptance; unexpected capture
+errors and drops are not waived. Management and application captures survive
+through both teardown calls and the denial window. Per-phase interface byte
+statistics, pre-teardown WireGuard transfer counters, application forwarding-byte
+counts and continuous established/new-connection probes provide separate teardown
+evidence. A focused regression verifies flush-before-removal ordering and that
+an unexpected capture failure prevents the teardown callback. All three offline
+STANDARD acceptance regressions passed.
+
+One approved corrected isolated run against the existing product JAR exited zero:
+`P2_STANDARD_COMPATIBILITY=PASS`. Private evidence is retained at
+`/home/wpotech/5gnexusguard-p2-bypass-20261031-01`; no credentials, captures or raw
+runtime logs are committed. JAR SHA-256 remains
+`48fb7728186f3af4412e2d97fc2be4c901fc1bbcbf7e77584b4b2ed876bc992d`.
+No product transport, firewall, routing, authorization or port-allocation code
+changed for this correction; the already accepted port milestone was not reopened.
+
+Independent read-only source and packet review is PASS, with no introduced
+HIGH/CRITICAL finding. Seven captures finalized cleanly with zero reported drops.
+Each service has 14 protected SYN flows matched across both WG interfaces;
+management captures each contain 565 encrypted WG transport packets and no
+protected application marker. The assigned-port unauthorized SYN and matching
+RST/ACK appear at both management boundaries, with no matching flow at WG or
+application boundaries. The unauthorized application marker is absent.
+
+After completed two-sided teardown, each service recorded 41 established-mode
+and 44 new-connection attempts with zero successful forwarding. Application byte
+counts stayed at 2082 and 4351 respectively through their denial windows; the
+application capture independently totals 4351 request bytes. The review confirmed
+no residual WG interfaces or proxy listeners, stopped owned processes, removed
+owned namespaces/container, private evidence permissions and equal normalized
+host configuration. Raw snapshots differ in lifetime countdowns. The 24 existing
+tracked `target/` modifications were preserved.
+
+This accepts the tested assigned-port plaintext bypass correction and completed
+two-sided teardown behavior. It does not establish general routed access denial
+to WG addresses, automatic owner cleanup from connector-only disconnect, or an
+instantaneous revocation bound. P2 remains PARTIAL pending package installation,
+systemd lifecycle and the other operational gates. Production security acceptance
+remains BLOCKED and website readiness remains NO.

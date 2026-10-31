@@ -1,9 +1,28 @@
 """Offline negative acceptance controls, never run JVMs or packet operations."""
 import unittest
+from unittest.mock import Mock
+from standard_packet import finalize_then_teardown
 from standard_evidence import qualification_complete,residual_denial
 
 
 class StandardEvidenceTests(unittest.TestCase):
+    def test_capture_flush_precedes_teardown_and_unexpected_exit_blocks_it(self):
+        events=[]
+        capture=Mock()
+        capture.stop.side_effect=lambda:events.append('flushed')
+        active=[capture]
+        def teardown():
+            self.assertEqual(active, [])
+            events.append('interfaces-removed')
+        finalize_then_teardown(capture,active,teardown)
+        self.assertEqual(events,['flushed','interfaces-removed'])
+        capture.stop.side_effect=RuntimeError('unexpected tcpdump failure')
+        active=[capture];teardown=Mock()
+        with self.assertRaisesRegex(RuntimeError,'unexpected tcpdump failure'):
+            finalize_then_teardown(capture,active,teardown)
+        teardown.assert_not_called()
+        self.assertEqual(active,[capture])
+
     def test_positive_only_report_cannot_pass_complete_standard_qualification(self):
         positive={'discovery_registration':'PASS','authorized_traffic':'PASS',
                   'interface_ownership':'PASS','disconnect':'PASS',

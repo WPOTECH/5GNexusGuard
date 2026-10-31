@@ -14,6 +14,13 @@ from standard_evidence import residual_denial, qualification_complete, packet_ev
 def cmd(args):return subprocess.check_output(args,text=True,stderr=subprocess.PIPE,timeout=15)
 
 
+def finalize_then_teardown(group, active_captures, teardown):
+    """Flush interface captures successfully before allowing interface removal."""
+    group.stop()  # Unexpected exits/drops remain fatal; never waive them.
+    active_captures.remove(group)
+    return teardown()
+
+
 def main():
     if not Path('/.dockerenv').exists() or os.environ.get('DL_IPSEC_ISOLATED')!='1' or not os.path.ismount('/lab/private'):
         raise RuntimeError('approved isolated Docker environment required')
@@ -45,7 +52,7 @@ def main():
             with status.open('w') as log:
                 return subprocess.Popen(['ip','netns','exec',names[role],'tcpdump','-Z','root','-U',
                     '--immediate-mode','-n','-i',interface,'-w',str(pcap)],stdout=subprocess.DEVNULL,stderr=log)
-        group=CaptureSet(spawn,boundaries=boundaries);group.start(directory);captures.append(group)
+        group=CaptureSet(spawn,boundaries=boundaries);group.start(directory);captures.append(group);return group
     def kernel(role,interface):
         result={}
         for field in ('listen-port','endpoints','latest-handshakes','transfer'):
@@ -57,7 +64,7 @@ def main():
         for role in names:
             observed={'monotonic_ns':time.monotonic_ns()}
             for label,argv in (
-                    ('links',['ip','-j','-d','link','show']),
+                    ('links',['ip','-j','-s','-d','link','show']),
                     ('addresses',['ip','-j','address','show']),
                     ('routes',['ip','-j','route','show','table','all']),
                     ('listeners',['ss','-H','-lnt']),
@@ -100,9 +107,10 @@ def main():
         report['discovery_registration']='PASS'
         # A regular protected application, separate from both actual JVMs.
         server='import socketserver\nclass H(socketserver.BaseRequestHandler):\n def handle(self):\n  while True:\n   p=self.request.recv(4096)\n   if not p:break\n   self.request.sendall(p)\nsocketserver.ThreadingTCPServer(("127.0.0.1",18080),H).serve_forever()'
+        server=server.replace('import socketserver', 'import socketserver,threading,json\nfrom pathlib import Path\nlock=threading.Lock();count=0\ndef record(n):\n global count\n with lock:\n  count+=n\n  Path("/lab/evidence/application-bytes.local.json").write_text(json.dumps(count))').replace('   self.request.sendall(p)', '   record(len(p));self.request.sendall(p)')
         process('b',['python3','-u','-c',server],'protected-application')
         network_state('pre-authorization')
-        connections={}
+        connections={};service_captures={}
         # These IDs intentionally shared the old sanitizer's first eight chars.
         for service in ('prototype-a','prototype-b'):
             api('b','/api/services/expose',{'serviceId':service,'protocol':'tcp','localBind':'127.0.0.1:18080','allowedNodes':[identities['a']]})
@@ -111,7 +119,7 @@ def main():
             owner=api('b','/api/tunnels')['owner:'+service+':'+identities['a']]
             connection['ownerIf']=owner['ifName'];connection['ownerEgressPort']=owner['egressPort']
             directory=root/service;directory.mkdir(mode=0o700)
-            capture(directory,(('a',connection['tunnelIf'],'endpoint-wg'),('b',owner['ifName'],'owner-wg')))
+            service_captures[service]=capture(directory,(('a',connection['tunnelIf'],'endpoint-wg'),('b',owner['ifName'],'owner-wg')))
             wait(lambda:echo('a',int(connection['connectTo'].rsplit(':',1)[1])),'protected echo '+service,10)
             connections[service]=connection;report['connections']=connections
             report.setdefault('establishment_ns',{})[service]=time.monotonic_ns()-before
@@ -167,11 +175,25 @@ def main():
                 worker=TrafficStream(host='127.0.0.1',port=int(connection['connectTo'].rsplit(':',1)[1]),
                                      namespace=names['a'],new_connections=fresh)
                 streams.append(worker);worker.start(directory);worker.ready(delivered=True);workers.append((mode,worker))
-            request_started=time.monotonic_ns()
-            api('a','/api/disconnect/'+service,{})
-            api('b','/internal/tunnel/negotiate/'+service+'/'+identities['a'],method='DELETE')
-            complete=time.monotonic_ns();time.sleep(.3)
-            report['residual'][service]={'request_started_ns':request_started,'both_disconnects_complete_ns':complete}
+            network_state('before-disconnect-'+service)
+            transfer_before={role:ns(role,['/usr/bin/wg','show',iface,'transfer'])
+                             for role,iface in (('a',connection['tunnelIf']),('b',connection['ownerIf']))}
+            def teardown():
+                request_started=time.monotonic_ns()
+                api('a','/api/disconnect/'+service,{})
+                api('b','/internal/tunnel/negotiate/'+service+'/'+identities['a'],method='DELETE')
+                return request_started,time.monotonic_ns()
+            finalized_start=time.monotonic_ns()
+            request_started,complete=finalize_then_teardown(service_captures[service],captures,teardown)
+            bytes_complete=json.loads((root/'application-bytes.local.json').read_text())
+            time.sleep(.3)
+            bytes_after=json.loads((root/'application-bytes.local.json').read_text())
+            if bytes_after!=bytes_complete:raise RuntimeError('application forwarding increased after teardown')
+            network_state('after-disconnect-'+service)
+            report['residual'][service]={'request_started_ns':request_started,'both_disconnects_complete_ns':complete,
+                'capture_finalization_started_ns':finalized_start,'captures_finalized_before_request':True,
+                'wireguard_transfer_before':transfer_before,'application_bytes_at_completion':bytes_complete,
+                'application_bytes_after_denial_window':bytes_after}
             for mode,worker in workers:
                 rows=worker.stop();streams.remove(worker)
                 result=residual_denial(rows,complete)
