@@ -13,10 +13,12 @@ done
 [[ $EUID = 0 ]] || { echo 'Run the reviewed installer as root on the intended target.' >&2; exit 77; }
 [[ $package = /* && -f $package && ! -L $package ]] || { echo 'An explicit local regular .deb is required.' >&2; exit 2; }
 [[ $(dpkg-deb -f "$package" Package) = defenderlink-mesh ]] || exit 2
-# --no-download makes dependency availability an explicit offline installation gate.
+# Direct local dpkg avoids APT's --no-download local-archive pathname failure.
+# Dependencies must already be installed; this branch never fetches them.
 if $install_deps; then
  apt-get install -y "$package"
 else
- apt-get --no-download install -y "$package"
+ dpkg --no-act --install "$package"
+ dpkg --install "$package"
 fi
 printf '%s\n' 'Installed without starting. Review /etc/defenderlink/node.json; run 5gnexus diagnostics, then 5gnexus start.'

@@ -15,6 +15,8 @@ RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/python3 /opt/defenderlink/libexec/runtime.py run
 Restart=on-failure
 RestartSec=3s
+# Quarkus handles SIGTERM and exits with 128+SIGTERM after graceful shutdown.
+SuccessExitStatus=143
 TimeoutStopSec=30s
 KillMode=control-group
 NoNewPrivileges=true
@@ -27,7 +29,9 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-ReadWritePaths=/etc/wireguard/defenderlink
+# Expose only this service's private child, without opening the host parent.
+BindPaths=/etc/wireguard/defenderlink:/etc/wireguard
+ReadWritePaths=/etc/wireguard
 StandardOutput=journal
 StandardError=journal
 

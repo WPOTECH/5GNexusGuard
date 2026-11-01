@@ -1,5 +1,6 @@
 """Nonprivileged deployment negative controls; no service/network operations."""
 import importlib.util
+import configparser
 import json
 import os
 from pathlib import Path
@@ -21,9 +22,20 @@ class RuntimeTests(unittest.TestCase):
         cfg=runtime.read_config(self.path)
         cmd=runtime.java_command(cfg,Path('/opt/defenderlink/lib/defenderlink-mesh.jar'))
         self.assertIn('-Dmesh.access.mode=STANDARD',cmd)
-        self.assertIn('-Dmesh.tunnel.config-dir=/etc/wireguard/defenderlink',cmd)
+        self.assertIn('-Dmesh.tunnel.config-dir=/etc/wireguard',cmd)
         cfg['mode']='DUAL_TUNNEL'
         with self.assertRaisesRegex(ValueError,'not yet qualified'):runtime.java_command(cfg,Path('/unused'))
+    def test_service_mount_exposes_only_owned_child_at_runtime_path(self):
+        unit=configparser.ConfigParser(interpolation=None)
+        unit.read(Path(__file__).parents[1]/'systemd/defenderlink-mesh.service')
+        service=unit['Service']
+        source,target=service['BindPaths'].split(':')
+        self.assertEqual('/etc/wireguard/defenderlink',source)
+        self.assertEqual(str(runtime.WG_CONFIG),target)
+        self.assertEqual(target,service['ReadWritePaths'])
+        self.assertEqual('CAP_NET_ADMIN',service['CapabilityBoundingSet'])
+        self.assertEqual('true',service['NoNewPrivileges'])
+        self.assertEqual('143',service['SuccessExitStatus'])
     def test_invalid_or_production_configuration_denies(self):
         for edit in ({'mode':'STANDARD '},{'mode':'TYPO'},{'production_admission':True},
                      {'http_port':True},{'http_port':22},{'public_endpoint':'bad:51820'},

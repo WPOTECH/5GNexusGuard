@@ -14,7 +14,9 @@ import urllib.request
 
 CONFIG=Path('/etc/defenderlink/node.json')
 STATE=Path('/var/lib/defenderlink')
-WG_CONFIG=Path('/etc/wireguard/defenderlink')
+# The service binds its private persistent child over this path in its mount
+# namespace. The host's root-owned /etc/wireguard stays inaccessible to this UID.
+WG_CONFIG=Path('/etc/wireguard')
 DEFAULT=dict(version=1, mode='STANDARD', http_host='127.0.0.1', http_port=8443,
              gossip_port=9450, public_endpoint='127.0.0.1:51820', heap_mib=512,
              production_admission=False)

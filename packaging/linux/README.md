@@ -22,6 +22,11 @@ sudo 5gnexus start
 sudo 5gnexus stop
 ```
 
+The offline installer uses a local `dpkg --no-act --install` preflight followed
+by `dpkg --install`. Dependencies must already be installed; it never fetches
+them or runs an automatic dependency-repair operation. A failed preflight stops
+installation. This is not an atomic rollback guarantee for failed installations.
+
 The default HTTP bind is loopback. Set an explicit management address and
 WireGuard endpoint for the intended trusted prototype network. Existing
 management/discovery APIs are not promoted to a production authentication
@@ -39,6 +44,12 @@ Persistent paths:
 - `/etc/wireguard/defenderlink`: private config location compatible with the
   existing `/usr/bin/wg` AppArmor confinement.
 - `/opt/defenderlink`: package-owned application and launcher.
+
+Inside the systemd service's private mount namespace, the persistent private
+child `/etc/wireguard/defenderlink` is bound over `/etc/wireguard`. The launcher
+uses that in-service path. The host parent stays root-owned mode 0700; unrelated
+host WireGuard configuration is not exposed to the service. No global permission,
+ACL or capability expansion is required.
 
 The current package is a STANDARD runtime foundation. `DUAL_TUNNEL` is recognized
 but startup is explicitly refused until service integration of the actual V2
@@ -279,3 +290,89 @@ guest, QEMU exit 0 and absent owned PID, equal normalized host configuration and
 unchanged existing-VM list. Raw snapshot equality remains separate. STANDARD
 packet acceptance at `fd81255` stays PASS; overall P2 remains PARTIAL, production
 security acceptance BLOCKED and website readiness NO.
+
+## Offline installation recovery and installed service acceptance
+
+Runtime evidence collected 2026-11-01 UTC (2026-10-31 Polaris local time).
+The saved failure disk and original evidence were retained. Only a new overlay
+backed by that stopped disk was booted; every recovery invocation used
+`-nic none`. No existing libvirt VM, host network, module, transport or native
+authorization configuration was modified.
+
+**Root cause:** APT 3.2.0's offline local-archive procedure fails before dpkg
+unpacking, despite an absolute readable ISO path and satisfied dependencies.
+The exact command `apt-get --no-download install -y /mnt/p2/product.deb` exits
+100 with the previously recorded internal relative-pathname error. APT simulation
+exits 0; dpkg 1.23.7's local archive dry-run exits 0. The dpkg status and log are
+unchanged immediately after the failed APT call; the subsequent dry-run itself
+adds log records. Package metadata, data archive, permissions and maintainer
+scripts parse correctly. No metadata or maintainer-hook defect caused this error.
+Evidence: `/home/wpotech/5gnexusguard-p2-install-diag-20261031-01`.
+
+The external installer's default branch now uses only local dpkg preflight and
+installation. Explicit `--install-deps` behavior is unchanged. The unchanged
+original archive then installed successfully with no NIC; the package audit was
+clean and all dependencies were installed. No network access was added to repair
+installation. A regression failed with the original APT branch (exit 100), then
+passed with direct local dpkg; it also verifies a failed preflight prevents the
+install call and preserves quoted paths containing spaces.
+
+That installation exposed two separate package-service defects, corrected only
+after observing them:
+
+- The service UID could not traverse the root-owned 0700 `/etc/wireguard` parent.
+  The service-private bind described above exposes only its owned child and
+  preserves the parent permissions. Runtime path and unit binding are tested
+  together; the installed mount was proved by mountinfo and device/inode identity.
+- Quarkus handles SIGTERM and exits 143 after graceful shutdown. The unit now
+  recognizes exactly 143 with `SuccessExitStatus`; normal stops must actually be
+  inactive. Other failures, including SIGKILL and invalid configuration exit 1,
+  retain failure/restart semantics.
+
+**Final acceptance: PASS**, independently reviewed with no introduced
+HIGH/CRITICAL finding. Evidence:
+`/home/wpotech/5gnexusguard-p2-install-retest-20261031-05`.
+The tested completed archive is
+`/home/wpotech/5gnexusguard-p2-deb-recovery-02/defenderlink-mesh_1.0.0+p2.git0433336_amd64.deb`,
+built from the reviewed working-tree corrections on baseline `0433336`, SHA-256
+`fae62212e2f43924032d69144c6e5817747f3eb7856d967ad7750acc44190967`.
+The source archive, staged copy and guest copy hashes match; installed launcher,
+unit, configuration, runtime and JAR bytes match the extracted archive.
+
+The actual installed service passed start/status/stop/restart, SIGKILL recovery,
+configuration validation, service UID, NET_ADMIN-only capabilities,
+NoNewPrivileges, private state/key permissions, and identity retention across
+restart, crash recovery and package removal/reinstallation. Installation and
+reinstallation did not start or enable the service. Invalid production admission
+and unqualified DUAL_TUNNEL startup were refused; an unapproved service connection
+created no tunnel. Direct systemd startup with invalid configuration exited 1
+without API readiness, followed by successful genuine restart after restoration.
+Removal/reinstallation preserved an unrelated sentinel and parent permissions.
+A final real service was active before controlled cleanup. Normal stop left no
+service UID processes; the complete detailed link inventory contained only lo.
+
+Guest result and runner result are both PASS. The owned guest shut down, QEMU
+exited 0, and independently compared normalized host snapshots match. The original
+failure disk hash and all 24 pre-existing tracked `target/` paths are unchanged.
+Private raw logs, credentials, disks and serial archives are not committed.
+
+Intermediate failures remain preserved, rather than relabeled as acceptance:
+initial diagnostic-script syntax error; service ancestor-permission failure;
+filtered ip JSON returning `[{}]`; a prematurely staged 1268-byte partial archive;
+and redundant `reset-failed` on an unloaded stopped unit. The validator now reads
+full detailed interface records, waits for the completed build and verifies the
+archive hash before installation, and tests actual subsequent startup instead of
+requiring that reset command. Two earlier host snapshots differed by external
+Docker veth/route removal; those strict comparison FAILs remain recorded.
+
+Validation: 7 packaging regressions, 3 offline operational evidence regressions,
+43 scratch-built Java tests, shell syntax, systemd unit verification and
+`git diff --check` passed. Java builds stayed outside the checkout. No completed
+STANDARD/P0/P1 packet milestone was reopened.
+
+This accepts a genuinely installed, functioning loopback STANDARD Linux service.
+It does not claim new protected application traffic, active-tunnel crash
+reconciliation or deployed dual-tunnel integration. STANDARD packet acceptance
+at `fd81255` remains preserved. Overall P2 remains PARTIAL for its existing
+remaining operational/integration gates; production security acceptance stays
+BLOCKED and website readiness NO.
