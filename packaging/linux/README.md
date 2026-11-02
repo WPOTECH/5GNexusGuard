@@ -1,5 +1,11 @@
 # P2 Linux operational packaging — first milestone
 
+Current installed native prototype acceptance: see
+[Native isolated service deployment](NATIVE-ISOLATED.md) and
+[executed integration evidence](../../docs/testing/installed-native-v2-results.md).
+The STANDARD default and production denial remain unchanged. Historical results
+below retain their original scope and status.
+
 This milestone builds the real Quarkus application into a local Debian package.
 It does not rebuild a frontend, modify the checkout's `target/`, install test
 credentials, or start a service during installation. STANDARD remains default.
@@ -51,11 +57,12 @@ uses that in-service path. The host parent stays root-owned mode 0700; unrelated
 host WireGuard configuration is not exposed to the service. No global permission,
 ACL or capability expansion is required.
 
-The current package is a STANDARD runtime foundation. `DUAL_TUNNEL` is recognized
-but startup is explicitly refused until service integration of the actual V2
-Java exporter, AA, supervisor, tunnel health and BPF gate is qualified. The
-isolated fixture is never called by the product launcher, and no synthetic
-credentials are supplied. No production admission option can be enabled.
+The default package remains a STANDARD runtime. Normal `DUAL_TUNNEL` configuration
+startup is refused: production integration is not qualified. A separate optional
+add-on supplies the accepted DISPOSABLE_VM installed native prototype described
+above. It requires an explicit current-boot, NIC-free KVM profile and external
+credentials/approval. No development packet fixture is called by its services,
+and no production admission option can be enabled.
 
 Prepared validation commands need fresh operator approval before execution:
 

@@ -153,7 +153,7 @@ def command(args, *, input=None):
 
 class Publisher:
     def __init__(self, controller, run, pin_dir, wg_iface, resource_iface, *, now=None,
-                 health=None, object_path=None):
+                 health=None, object_path=None, table='kernel_gate_v2_test'):
         self.controller, self.run = controller, run
         self.pin_dir = Path(pin_dir)
         if (not self.pin_dir.is_absolute() or str(self.pin_dir).rstrip('/') == '/' or
@@ -162,6 +162,9 @@ class Publisher:
                         for x in (wg_iface, resource_iface)) or wg_iface == resource_iface):
             raise ValueError('isolated bpffs path and distinct literal interface names required')
         self.wg, self.resource = wg_iface, resource_iface
+        if not re.fullmatch(r'[a-z_][a-z0-9_]{0,31}', table):
+            raise ValueError('literal owned nftables table required')
+        self.table = table
         self.auth_path = str(self.pin_dir/'maps'/'auth_map')
         self.health_path = str(self.pin_dir/'maps'/'health_map')
         self.now = now or (lambda: time.clock_gettime_ns(time.CLOCK_BOOTTIME))
@@ -202,7 +205,7 @@ class Publisher:
     def install(self):
         # No allow rules before the independent fail-closed nft chain is installed.
         # The two pre-existing interface names are deliberately fixed to this namespace.
-        rules = f'''table inet kernel_gate_v2_test {{
+        rules = f'''table inet {self.table} {{
  chain forward {{ type filter hook forward priority 10; policy drop;
   iifname "{self.wg}" oifname "{self.resource}" ip saddr 10.79.0.1 ip daddr 10.80.0.2 tcp dport 8080 meta mark 0x5a17c0de counter accept
   iifname "{self.resource}" oifname "{self.wg}" ip saddr 10.80.0.2 ip daddr 10.79.0.1 tcp sport 8080 meta mark 0x5a17c0de ct state established counter accept
@@ -217,7 +220,7 @@ class Publisher:
                    item['chain'].get('table') == 'ipsec_dual'
                    for item in original['nftables']):
             raise RuntimeError('native forward chain is not deny-by-default')
-        # Test-only atomic forward-chain substitution: the old synthetic
+        # Owned-namespace atomic forward-chain substitution: the old synthetic
         # @authorized/absolute_lease wall-clock path must not confound evidence.
         # Existing input/output chains, tunnel policy, and default drop remain.
         override = f'''flush chain inet ipsec_dual forward
@@ -327,6 +330,15 @@ class FreshHealth:
 
     def prepare(self):
         """Test-only WG peer route; retain resource allowed-ips, never edit native.py."""
+        self._provision_probe()
+
+    def provision_owned_probe(self):
+        """Installed isolated adapter: prove owned daemon/netns identities first."""
+        if not self._identities():
+            raise RuntimeError('live owned namespaces required for probe provisioning')
+        self._provision_probe()
+
+    def _provision_probe(self):
         prefix = ['ip','netns','exec',self.endpoint_ns]
         peers = self.run([*prefix,'wg','show',self.wg,'peers']).splitlines()
         if len(peers) != 1 or not re.fullmatch(r'[A-Za-z0-9+/]{43}=', peers[0]):
@@ -365,6 +377,11 @@ insert rule inet ipsec_dual input iifname "{self.wg}" ip saddr 10.79.0.2 ip dadd
              '10.78.0.2/32[17/51821]', '10.77.0.1/32[17/51821]')):
             status = self.run(['ip','netns','exec',namespace,'swanctl','--list-sas',
                 '--uri','unix://' + str(self.vici_dir/role/'vici')])
+            # strongSwan 6 prints the UDP protocol name instead of number 17.
+            # Normalize only these exact /32 UDP/51821 selectors. All peer,
+            # CHILD_SA, SPI, route, echo and ESP-progress requirements stay intact.
+            status = re.sub(r'(?m)^([ \t]*(?:local|remote)[ \t]+10\.(?:77\.0\.1|78\.0\.2)/32)\[udp/51821\]$',
+                            r'\1[17/51821]', status)
             found = re.findall(r'(?m)^hybrid: #\d+, ESTABLISHED, IKEv2, '
                 r'([0-9a-f]{16})_i\*? ([0-9a-f]{16})_r\*?', status)
             if len(found) != 1 or not re.search(r'(?m)^\s*inner-transport: #\d+, '

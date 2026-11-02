@@ -102,18 +102,47 @@ def request(cfg,path):
         return json.load(response)
 
 
+def native_action(action):
+    units=['defenderlink-native-aa.service','defenderlink-native-exporter.service','defenderlink-native-supervisor.service']
+    if action=='native-stop':
+        return max(subprocess.run(['systemctl','stop',unit]).returncode for unit in reversed(units))
+    directory=Path('/opt/defenderlink/native')
+    if not (directory/'installed_runtime.py').is_file():raise ValueError('native add-on is not installed')
+    sys.path.insert(0,str(directory))
+    import installed_runtime
+    deployment=installed_runtime.configuration()
+    if action=='native-status':
+        from native_control_v2 import private_read
+        status=json.loads(private_read(Path(deployment['control']['directory'])/'status.json'))
+        import time
+        status['observation']='cached publisher observation; kernel deadlines govern each packet'
+        live=subprocess.run(['systemctl','is-active','--quiet',units[-1]]).returncode==0
+        if (not live or time.clock_gettime_ns(time.CLOCK_BOOTTIME)>=status.get('deadline_boottime_ns',0)
+                or time.clock_gettime_ns(time.CLOCK_BOOTTIME)-status.get('observed_boottime_ns',0)>=250_000_000):
+            status['kernel_permitted']=False
+        print(json.dumps(status));return 0
+    for unit in units:
+        result=subprocess.run(['systemctl','start',unit])
+        if result.returncode:
+            for started in reversed(units):subprocess.run(['systemctl','stop',started])
+            return result.returncode
+    return 0
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config',type=Path,default=CONFIG)
     parser.add_argument('--jar',type=Path,default=Path('/opt/defenderlink/lib/defenderlink-mesh.jar'))
     sub=parser.add_subparsers(dest='action',required=True)
-    for command in ('validate','diagnostics','run','start','status','stop','restart'):sub.add_parser(command)
+    for command in ('validate','diagnostics','run','start','status','stop','restart',
+                    'native-start','native-stop','native-status'):sub.add_parser(command)
     for command in ('connect','disconnect'):
         p=sub.add_parser(command);p.add_argument('service_id')
     args=parser.parse_args()
     try:
         os.umask(0o077)
         cfg=read_config(args.config)
+        if args.action.startswith('native-'):return native_action(args.action)
         if args.action=='validate':
             print(json.dumps({'configuration':'VALID','mode':cfg['mode'],'production_admission':False}));return
         if args.action=='diagnostics':

@@ -94,9 +94,10 @@ def firewall(role, inputs='', outputs='', forwards='', extra=''):
 
 
 class Topology:
-    def __init__(self, state, credentials=None):
+    def __init__(self, state, credentials=None, *, isolation_guard=None):
         self.state = state
         self.credentials = credentials
+        self.isolation_guard = isolation_guard or require_container
         self.created = []
         self.keys = []
         self.daemons = []
@@ -125,7 +126,7 @@ class Topology:
         ns(role, 'ip', 'route', 'add', destination, *via)
 
     def create(self):
-        require_container()
+        self.isolation_guard()
         if Path('/run') == self.state or Path('/run') in self.state.parents:
             raise ValueError('state must be outside the daemon private /run')
         existing = command('ip', 'netns', 'list').splitlines()

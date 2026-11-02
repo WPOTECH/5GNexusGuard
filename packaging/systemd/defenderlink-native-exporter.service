@@ -1,0 +1,21 @@
+[Unit]
+Description=5GNexusGuard installed isolated native exporter
+ConditionPathExists=/etc/defenderlink/native/deployment.json
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/defenderlink/native/installed_runtime.py exporter
+Restart=no
+TimeoutStopSec=30s
+KillMode=control-group
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectKernelModules=true
+ProtectHome=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+SuccessExitStatus=143

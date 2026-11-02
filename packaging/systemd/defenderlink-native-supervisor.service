@@ -1,0 +1,20 @@
+[Unit]
+Description=5GNexusGuard installed isolated native supervisor
+ConditionPathExists=/etc/defenderlink/native/deployment.json
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/defenderlink/native/installed_runtime.py supervisor
+Restart=no
+TimeoutStopSec=30s
+KillMode=control-group
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID
+ProtectKernelModules=true
+ProtectHome=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal

@@ -42,6 +42,15 @@ class FakeIO:
         return ''
 
 class PublisherTests(unittest.TestCase):
+    def test_installed_probe_requires_live_owned_identities_before_changes(self):
+        health=pub.FreshHealth.__new__(pub.FreshHealth)
+        health._identities=mock.Mock(return_value=False)
+        health._provision_probe=mock.Mock()
+        with self.assertRaises(RuntimeError):health.provision_owned_probe()
+        health._provision_probe.assert_not_called()
+        health._identities.return_value=True
+        health.provision_owned_probe()
+        health._provision_probe.assert_called_once()
     def test_structured_conflicting_verifier_and_permission_evidence_is_ambiguous(self):
         raw = ("libbpf: prog 'wg_ingress': failed to load: Operation not permitted\n"
                "libbpf: verifier log: invalid mem access 'scalar' private-key=SECRET")
@@ -328,11 +337,23 @@ class PublisherTests(unittest.TestCase):
                     f'    proto esp spi 0x00000001(1) reqid 42(0x0000002a) mode tunnel\n'
                     f'    lifetime current:\n'
                     f'        {counts[ns]}(bytes), 1(packets)\n')
-        with mock.patch.object(pub.FreshHealth, '_start', return_value=123):
-            h = pub.FreshHealth([5432,5433], 'wg-test', 'resource-test',
-                                'ep', 'gw', 'inner', run=health_run, vici_dir='/isolated')
-            self.assertTrue(h())
-            self.assertFalse(h())
+        for protocol in ('17', 'udp'):
+            replies[:]=[True,False]
+            def formatted(args, *, input=None):
+                text=health_run(args,input=input)
+                return text.replace('[17/51821]', '['+protocol+'/51821]') if '--list-sas' in args else text
+            with self.subTest(protocol=protocol), mock.patch.object(pub.FreshHealth, '_start', return_value=123):
+                h = pub.FreshHealth([5432,5433], 'wg-test', 'resource-test',
+                                    'ep', 'gw', 'inner', run=formatted, vici_dir='/isolated')
+                self.assertTrue(h())
+                self.assertFalse(h())
+        for invalid in ('[udp/51820]', '[tcp/51821]'):
+            def incorrect(args, *, input=None):
+                text=health_run(args,input=input)
+                return text.replace('[17/51821]',invalid) if '--list-sas' in args else text
+            with self.subTest(invalid=invalid), mock.patch.object(pub.FreshHealth,'_start',return_value=123):
+                h=pub.FreshHealth([5432,5433],'wg-test','resource-test','ep','gw','inner',run=incorrect,vici_dir='/isolated')
+                self.assertFalse(h())
         self.assertTrue(any('ping' in cmd and '-p' in cmd for cmd,_ in calls))
         self.assertTrue(any('--list-sas' in cmd and 'unix:///isolated/e/vici' in cmd for cmd,_ in calls))
 
