@@ -26,6 +26,22 @@ public class NativePolicyExporter {
     @ConfigProperty(name = "mesh.native.service-id", defaultValue = "unconfigured") String serviceId;
     @ConfigProperty(name = "mesh.native.client-node-id", defaultValue = "unconfigured") String clientId;
     @ConfigProperty(name = "mesh.native.lease-file", defaultValue = "/run/defenderlink-native/lease.json") String leaseFile;
+    @ConfigProperty(name = "mesh.native.v2.directory") java.util.Optional<String> v2Directory;
+    @ConfigProperty(name = "mesh.native.v2.operator-key") java.util.Optional<String> operatorKey;
+    @ConfigProperty(name = "mesh.native.v2.supervisor-key") java.util.Optional<String> supervisorKey;
+    private NativeV2Inbox v2Inbox;
+
+    @Scheduled(every = "PT0.1S", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
+    void approvedV2() {
+        if (!mode.exportsLease() || v2Directory == null || v2Directory.isEmpty()) return;
+        try {
+            if (v2Inbox == null) v2Inbox = new NativeV2Inbox(java.util.HexFormat.of().parseHex(operatorKey.orElseThrow()),
+                    java.util.HexFormat.of().parseHex(supervisorKey.orElseThrow()), serviceId, clientId, identity);
+            v2Inbox.poll(Path.of(v2Directory.get()));
+        } catch (Exception ignored) {
+            // Never manufacture approval or extend a lifetime on IPC/verification failure.
+        }
+    }
 
     public static boolean allows(ServiceRecord s, String owner, String client, Instant now,
                                  boolean ownerActive, boolean clientActive) {
