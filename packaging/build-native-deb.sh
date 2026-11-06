@@ -12,7 +12,7 @@ image=dl-ipsec-isolated-evidence:probe
 [[ $(docker image inspect "$image" --format '{{.Id}}') = sha256:ecd5c54a5243526f0fde27f061fca30a13e5911e855f6108b348f4b8787ce54e ]] || exit 2
 root="$out/package"
 mkdir -p "$root/DEBIAN" "$root/opt/defenderlink/native" "$root/usr/lib/systemd/system" "$root/etc/apparmor.d/local"
-for module in native config issuance_v2 admission_v2 authorization_aa_v2 native_control_v2 kernel_gate_publisher_v2; do
+for module in native config issuance_v2 admission_v2 authorization_aa_v2 native_control_v2 kernel_gate_publisher_v2 external_gateway; do
  install -m 0644 "$repo/scripts/ipsec-dual/$module.py" "$root/opt/defenderlink/native/$module.py"
 done
 install -m 0644 "$repo/packaging/linux/native_runtime.py" "$root/opt/defenderlink/native/installed_runtime.py"
@@ -45,7 +45,7 @@ Architecture: $arch
 Depends: defenderlink-mesh, python3-cryptography, iproute2, wireguard-tools, strongswan-charon, strongswan-swanctl, libstrongswan-standard-plugins, nftables, bpftool, iputils-ping, apparmor
 Maintainer: WPO Tech <support@wpotech.com>
 Description: 5GNexusGuard explicitly provisioned isolated native services
- NIC-free disposable VM only. Production admission remains disabled.
+ Explicit isolated KVM guest only. Production admission remains disabled.
 EOF
 cat >"$root/DEBIAN/postinst" <<'EOF'
 #!/bin/sh

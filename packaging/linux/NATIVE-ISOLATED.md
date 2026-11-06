@@ -7,6 +7,10 @@ prototype tuple is `10.79.0.1 → 10.80.0.2:8080`. This is not a generic product
 deployment switch. STANDARD remains default, the normal DUAL_TUNNEL launcher
 remains refused, and `production_admission=true` is always rejected.
 
+This page covers the managed Linux outer gateway and NIC-free `DISPOSABLE_VM`
+profile. The separate [pfSense profile](PFSENSE-ISOLATED.md) uses two explicitly
+pinned private guest links and a real external IPsec gateway.
+
 ## Services and persistent locations
 
 | Component | Installed location / behavior |

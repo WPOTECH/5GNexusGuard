@@ -39,5 +39,23 @@ class NativeRuntimeTests(unittest.TestCase):
         imports={node.module for node in ast.walk(tree) if isinstance(node,ast.ImportFrom)}
         self.assertFalse(imports & {'isolated_enforcement','functional_p0','native_aa_java_harness','integration'})
 
+    def test_external_profile_requires_explicit_pinned_guest_nics(self):
+        from native_control_v2 import boot_id
+        with tempfile.TemporaryDirectory() as directory:
+            config=Path(directory)/'deployment.json'
+            cfg=dict(version=1,profile='DISPOSABLE_PFSENSE',production_admission=False,boot_id=boot_id(),
+                service='svc',client='a'*64,owner='b'*64,operator_key='c'*64,supervisor_key='d'*64,
+                credentials='/private/credentials',aa={},control={},
+                external_gateway={role:dict(name='p23-'+role,mac='52:54:00:23:02:0'+str(i))
+                    for i,role in enumerate(('wan','lan'),1)})
+            config.write_text(json.dumps(cfg));config.chmod(0o600)
+            links=[dict(ifname='lo')]+[dict(ifname=x['name'],address=x['mac']) for x in cfg['external_gateway'].values()]
+            with patch.object(runtime,'CONFIG',config),patch.object(runtime.os,'geteuid',return_value=0),patch.object(runtime.subprocess,'check_output',side_effect=['kvm\n',json.dumps(links)]):
+                self.assertEqual(cfg,runtime.configuration())
+            for bad in (links+[dict(ifname='management')],links[:-1]):
+                with patch.object(runtime,'CONFIG',config),patch.object(runtime.os,'geteuid',return_value=0),patch.object(runtime.subprocess,'check_output',side_effect=['kvm\n',json.dumps(bad)]),self.assertRaises(ValueError):runtime.configuration()
+            cfg['production_admission']=True;config.write_text(json.dumps(cfg))
+            with patch.object(runtime,'CONFIG',config),self.assertRaises(ValueError):runtime.configuration()
+
 
 if __name__=='__main__':unittest.main()

@@ -10,7 +10,11 @@ UMask=0077
 ExecStart=/usr/bin/python3 /opt/defenderlink/native/installed_runtime.py supervisor
 Restart=no
 TimeoutStopSec=30s
-KillMode=control-group
+# Let the supervisor zero/read back maps before terminating its owned helpers.
+# Any child left when the main process exits (or times out) is still killed.
+KillMode=mixed
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
 NoNewPrivileges=true
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID
 ProtectKernelModules=true

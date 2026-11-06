@@ -29,9 +29,10 @@ def configuration():
     from native_control_v2 import private_read, private_directory, boot_id
     private_directory(CONFIG.parent)
     cfg = json.loads(private_read(CONFIG))
-    if (set(cfg) != {'version', 'profile', 'production_admission', 'boot_id', 'service',
+    external = cfg.get('profile') == 'DISPOSABLE_PFSENSE'
+    if (set(cfg) - ({'external_gateway'} if external else set()) != {'version', 'profile', 'production_admission', 'boot_id', 'service',
                     'client', 'owner', 'operator_key', 'supervisor_key', 'credentials', 'aa', 'control'}
-            or type(cfg['version']) is not int or cfg['version'] != 1 or cfg['profile'] != 'DISPOSABLE_VM'
+            or type(cfg['version']) is not int or cfg['version'] != 1 or cfg['profile'] not in ('DISPOSABLE_VM','DISPOSABLE_PFSENSE')
             or cfg['production_admission'] is not False or cfg['boot_id'] != boot_id()):
         raise ValueError('explicit current-boot isolated profile required')
     if os.geteuid() != 0:
@@ -40,7 +41,10 @@ def configuration():
     if guest not in ('kvm', 'qemu'):
         raise ValueError('disposable KVM guest required')
     links = json.loads(subprocess.check_output(['ip', '-j', 'link', 'show'], text=True))
-    if len(links) != 1 or links[0].get('ifname') != 'lo':
+    if external:
+        from external_gateway import interfaces
+        interfaces(cfg.get('external_gateway'), links)
+    elif len(links) != 1 or links[0].get('ifname') != 'lo':
         raise ValueError('guest must have no network adapter')
     for name in ('client', 'owner', 'operator_key', 'supervisor_key'):
         if not isinstance(cfg[name], str) or not re.fullmatch('[0-9a-f]{64}', cfg[name]):
@@ -117,7 +121,12 @@ def supervisor(cfg):
     try:
         # Default Topology callers retain their existing Docker guard. This new
         # installed adapter proves an explicit NIC-free VM instead.
-        topology = Topology(transport, Path(cfg['credentials']), isolation_guard=configuration)
+        if cfg['profile'] == 'DISPOSABLE_PFSENSE':
+            from external_gateway import ExternalTopology
+            topology = ExternalTopology(transport, Path(cfg['credentials']), isolation_guard=configuration,
+                                        external=cfg['external_gateway'])
+        else:
+            topology = Topology(transport, Path(cfg['credentials']), isolation_guard=configuration)
         topology.create()
         if PINS.exists(): raise ValueError('refusing to adopt existing kernel pins')
         PINS.mkdir(mode=0o700); owned_pins=True
@@ -127,8 +136,12 @@ def supervisor(cfg):
             if args[0] == 'tc':
                 return command(['nsenter','--net=/run/netns/'+NAMES['i'],'--',*args],input=input)
             return command(['ip','netns','exec',NAMES['i'],*args],input=input)
-        health = FreshHealth([topology.daemon_roles[r].pid for r in ('e','o')],
-            'wg-inner','resource',NAMES['e'],NAMES['o'],NAMES['i'],vici_dir=transport)
+        if cfg['profile'] == 'DISPOSABLE_PFSENSE':
+            from external_gateway import ExternalHealth
+            health = ExternalHealth(topology.daemon_roles['e'].pid,NAMES['e'],NAMES['i'],vici_dir=transport)
+        else:
+            health = FreshHealth([topology.daemon_roles[r].pid for r in ('e','o')],
+                'wg-inner','resource',NAMES['e'],NAMES['o'],NAMES['i'],vici_dir=transport)
         # The existing scoped gate has two independent nft forward hooks. No
         # wall-clock lease or unsigned Java export is used by this adapter.
         publisher = Publisher(instance,inner,PINS,'wg-inner','resource',health=health,
@@ -137,7 +150,7 @@ def supervisor(cfg):
         health.provision_owned_probe()
         while True:
             permitted = publisher.tick()
-            atomic_private_write(status,json.dumps(dict(profile='DISPOSABLE_VM',production_admission=False,
+            atomic_private_write(status,json.dumps(dict(profile=cfg['profile'],production_admission=False,
                 supervisor_pid=os.getpid(),observed_boottime_ns=time.clock_gettime_ns(time.CLOCK_BOOTTIME),
                 session=instance.session,authorization=instance.admission.status,
                 kernel_permitted=bool(permitted),deadline_boottime_ns=instance.admission.deadline,
@@ -147,7 +160,13 @@ def supervisor(cfg):
         errors=[]
         if publisher:
             try: publisher.revoke()
-            except Exception: errors.append('revoke')
+            except Exception as error:
+                # Publisher's bounded map diagnostic contains only allowlisted
+                # types/reasons and numeric exit codes, never raw command output.
+                text=str(error)
+                errors.append('revoke: ' + text if type(error) is RuntimeError and
+                    text.startswith('map zero/readback failed; revocation uncertain until kernel deadline: ') and
+                    len(text)<=1600 else 'revoke_unknown')
         if topology:
             topology.close()
             names={r.split()[0] for r in command(['ip','netns','list']).splitlines() if r}
@@ -159,7 +178,7 @@ def supervisor(cfg):
                 for entry in directory.iterdir(): entry.unlink()
                 directory.rmdir()
             PINS.rmdir()
-        atomic_private_write(status,json.dumps(dict(profile='DISPOSABLE_VM',production_admission=False,
+        atomic_private_write(status,json.dumps(dict(profile=cfg['profile'],production_admission=False,
             kernel_permitted=False,stopped=True,cleanup_errors=errors)).encode())
         if errors: raise RuntimeError('installed cleanup failed')
 

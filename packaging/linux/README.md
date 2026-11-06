@@ -64,6 +64,12 @@ above. It requires an explicit current-boot, NIC-free KVM profile and external
 credentials/approval. No development packet fixture is called by its services,
 and no production admission option can be enabled.
 
+The additional explicit `DISPOSABLE_PFSENSE` profile uses pinned guest NICs on
+private QEMU links and an external pfSense outer gateway. Its required appliance
+egress interlock, installed setup and packet evidence are documented in
+[PFSENSE-ISOLATED.md](PFSENSE-ISOLATED.md). It retains the same V2 admission and
+inner kernel gates; the default package mode stays STANDARD.
+
 Prepared validation commands need fresh operator approval before execution:
 
 ```sh

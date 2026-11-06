@@ -106,11 +106,13 @@ def daemon_config(directory):
 ''')
 
 
-def provision_operator(state, source):
+def provision_operator(state, source, *, roles=('e', 'o')):
     """Copy explicit protected operator credentials; never issue a CA in native mode."""
     if source.resolve() != source or source.stat().st_uid != 0 or stat.S_IMODE(source.stat().st_mode) != 0o700:
         raise ValueError('credentials require a real root-owned mode-0700 directory')
-    for role in ('e', 'o'):
+    if roles not in (('e', 'o'), ('e',)):
+        raise ValueError('invalid credential roles')
+    for role in roles:
         origin = source / role
         # A trusted operator supplies reciprocal, pinned swanctl profiles and PKI.
         required = ('swanctl.conf', 'private/identity.pem', 'x509/identity.pem', 'x509ca/ca.pem')

@@ -146,7 +146,8 @@ def command(args, *, input=None):
             category = ('verifier_rejected' if re.search(r'verifier|map ABI', stderr, re.I)
                         else 'permission_denied' if re.search(r'permission denied|operation not permitted', stderr, re.I)
                         else 'kernel_command_failed')
-            raise RuntimeError('Kernel gate command failed: ' + category) from None
+            raise RuntimeError('Kernel gate command failed: ' + category +
+                               ' exit=' + str(error.returncode)) from None
         raise RuntimeError('isolated command failed') from None
     return result.stdout
 
@@ -194,12 +195,21 @@ class Publisher:
         # only its independently checked kernel deadline then bounds access.
         self.current = None
         self.revocation_uncertain = True
-        errors = 0
+        errors = []
         for path, size in ((self.health_path, HEALTH.size), (self.auth_path, AUTH.size)):
             try: self._update(path, bytes(size))
-            except Exception: errors += 1
+            except Exception as error:
+                kind = type(error).__name__
+                if kind not in ('RuntimeError','TimeoutExpired','CalledProcessError','JSONDecodeError','ValueError','OSError'):
+                    kind = 'unknown'
+                text = str(error)
+                reason = text if (text in ('BPF map readback length mismatch','BPF map readback mismatch')
+                    or re.fullmatch(r'Kernel gate command failed: (?:verifier_rejected|permission_denied|kernel_command_failed) exit=-?\d{1,10}',text)) else 'unknown'
+                errors.append(dict(map='health' if path == self.health_path else 'authorization',
+                                   error=kind,reason=reason))
         if errors:
-            raise RuntimeError('map zero/readback failed; revocation uncertain until kernel deadline') from None
+            raise RuntimeError('map zero/readback failed; revocation uncertain until kernel deadline: ' +
+                               repr(errors)) from None
         self.revocation_uncertain = False
 
     def install(self):
