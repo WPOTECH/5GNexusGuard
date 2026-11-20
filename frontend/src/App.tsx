@@ -31,6 +31,8 @@ export default function App() {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [services, setServices] = useState<ServiceRecord[]>([]);
   const [tunnels, setTunnels] = useState<Record<string, ActiveTunnel>>({});
+  const [selectedPeer, setSelectedPeer] = useState('');
+  const [serviceStatusAvailable, setServiceStatusAvailable] = useState(false);
   const [selectedService, setSelectedService] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [tunnelStatusAvailable, setTunnelStatusAvailable] = useState(false);
@@ -55,6 +57,7 @@ export default function App() {
       const val = nd.value;
       setNodes(Array.isArray(val) ? val : Object.values(val as Record<string, NodeRecord>));
     }
+    setServiceStatusAvailable(sv.status === 'fulfilled');
     if (sv.status === 'fulfilled') {
       const val = sv.value;
       setServices(Array.isArray(val) ? val : Object.values(val as Record<string, ServiceRecord>));
@@ -157,10 +160,15 @@ export default function App() {
   const activeTunnels = tunnelArr.filter(([, t]) => t.state === 'ACTIVE').length;
   const myNodeId = status?.nodeId || '';
 
-  const connectableServices = myNodeId ? services.filter(service =>
+  const authorizedServices = myNodeId && nodeStatusAvailable && serviceStatusAvailable ? services.filter(service =>
     service.active && service.ownerNodeId !== myNodeId &&
     service.allowedNodes?.includes(myNodeId)
   ) : [];
+  const eligibleOwners = new Set(authorizedServices.map(service => service.ownerNodeId));
+  const eligiblePeers = nodes.filter(node => node.registered && node.active && eligibleOwners.has(node.nodeId));
+  const selectedPeerIsEligible = eligiblePeers.some(peer => peer.nodeId === selectedPeer);
+  const connectableServices = selectedPeerIsEligible ?
+    authorizedServices.filter(service => service.ownerNodeId === selectedPeer) : [];
   const selectedIsEligible = connectableServices.some(service => service.serviceId === selectedService);
 
   const raftColor = status?.raftState === 'LEADER' ? T.accent
@@ -362,9 +370,22 @@ export default function App() {
               <SectionHeader title="Connections" />
               <Card style={{ marginBottom: 16 }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+                  <label htmlFor="connection-peer">Ledger peer</label>
+                  <select id="connection-peer" value={selectedPeerIsEligible ? selectedPeer : ''}
+                    disabled={connecting} onChange={event => {
+                      setSelectedPeer(event.target.value);
+                      setSelectedService('');
+                    }}>
+                    <option value="">Select a peer</option>
+                    {eligiblePeers.map(peer => (
+                      <option key={peer.nodeId} value={peer.nodeId}>
+                        {peer.displayName || short(peer.nodeId)}
+                      </option>
+                    ))}
+                  </select>
                   <label htmlFor="connection-service">STANDARD protected service</label>
                   <select id="connection-service" value={selectedIsEligible ? selectedService : ''}
-                    disabled={connecting} onChange={event => setSelectedService(event.target.value)}>
+                    disabled={connecting || !selectedPeerIsEligible} onChange={event => setSelectedService(event.target.value)}>
                     <option value="">Select a service</option>
                     {connectableServices.map(service => (
                       <option key={service.serviceId} value={service.serviceId}>{service.serviceId}</option>
@@ -375,6 +396,7 @@ export default function App() {
                   </Btn>
                 </div>
               </Card>
+              {(!nodeStatusAvailable || !serviceStatusAvailable) && <p role="status">Peer or resource data is unavailable.</p>}
               {!tunnelStatusAvailable && <p role="status">Live tunnel status is unavailable.</p>}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(380px,1fr))', gap: 12 }}>
                 {tunnelStatusAvailable && tunnelArr.map(([id, t]) => (
