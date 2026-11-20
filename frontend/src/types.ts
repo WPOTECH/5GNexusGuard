@@ -114,4 +114,4 @@ export interface ConnectResponse {
   peerTunnelIp: string;
 }
 
-export type ViewId = 'overview' | 'nodes' | 'services' | 'tunnels' | 'ledger';
+export type ViewId = 'overview' | 'topology' | 'nodes' | 'services' | 'tunnels' | 'ledger';

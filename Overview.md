@@ -36,7 +36,7 @@ Existing ZTA solutions solve these problems but introduce new ones:
 
 ## How It Works
 
-5GNexusGuard creates a mesh of nodes. Each node is a machine running the 5GNexusGuard service. Nodes discover each other automatically via UDP gossip broadcast. Access control is governed by a blockchain ledger replicated across every node — no central database, no controller, no cloud call required.
+5GNexusGuard creates a mesh of nodes. Each node is a machine running the 5GNexusGuard service. Nodes discover each other automatically via UDP gossip broadcast. STANDARD peers store policy in a local RocksDB ledger and exchange signed, hash-linked blocks. Direct STANDARD resource connections use the resource-owner peer without a mandatory forwarding gateway. The prototype ledger does not yet provide permissioned quorum trust.
 
 When a connection is needed between two services on different machines, 5GNexusGuard negotiates a dedicated WireGuard tunnel for that specific service. The tunnel is encrypted with ChaCha20-Poly1305 — the same cryptography used by Signal and WireGuard itself.
 
@@ -72,7 +72,7 @@ Nodes broadcast their presence via UDP gossip on port 9450. On a LAN, nodes disc
 Access control is written to a Merkle-chained blockchain stored in RocksDB on every node. Every service exposure, every authorization, every revocation is a signed ledger entry replicated across the mesh. The ledger is immutable, auditable, and tamper-evident.
 
 **4. Consensus Layer**
-A simplified Raft protocol ensures all nodes agree on the ledger state. One leader is elected, proposes blocks every 5 seconds, and replicates them to all peers. If the leader fails, a new one is elected automatically.
+The prototype uses simplified Raft-style elections and block broadcasts. The implementation can change leaders, but agreement and recovery after a partition have not been demonstrated.
 
 **5. Tunnel Layer**
 When Node A needs to reach a service on Node B, it reads its local ledger (no network call), verifies it is authorized, and negotiates a WireGuard tunnel directly with Node B. The tunnel is per-service — `dl-c-keycloak`, `dl-c-postgres`, `dl-c-redis` are separate interfaces with separate keys. Compromise of one tunnel exposes nothing else.
@@ -312,3 +312,23 @@ The core is always free and open source under the MIT license. The subscription 
 *No controller. No cloud. No trust by default.*
 
 *© 2026 WPO Tech. MIT License.*
+
+
+## Implementation audit for decentralized operation
+
+| Component | Implementation and boundary |
+|---|---|
+| Discovery | Preserve `GossipService` UDP LAN announcements and peer expiry. Announcements are unsigned. A recent sighting indicates discovery, and a sighting matching a ledger ID does not prove current possession of that identity. |
+| Identity and registration | Reuse `NodeIdentity` persisted Ed25519 identities and `MeshResource` registration. Dashboard registration currently covers the local node. Ledger registration is distinct from authenticated, permissioned peer enrollment. |
+| Ledger and replicated state | Preserve the RocksDB state and signed, hash-linked blocks in `LedgerStore`. Block acceptance checks sequence, hash, previous link and author signature. A valid author signature does not establish signer eligibility or quorum approval. Independently verified checkpoints are absent. |
+| Elections and recovery | `RaftConsensus` has term, heartbeat and election logic. The UDP vote path uses discovered peers and a simplified small-network vote rule. Blocks are appended locally before broadcast. This leaves authenticated membership, quorum commit, partition reconciliation and recovery after missing blocks unqualified. |
+| STANDARD authorization and links | Preserve `TunnelNegotiationResource` checks for ledger membership, Ed25519 initiator signature, resource ownership and service allowlist. `TunnelManager` sets up per-service WireGuard with local intercept and owner egress proxies. The signed request currently covers service ID, initiator ID and initiator WireGuard key. It does not cover the endpoint or a freshness nonce. |
+| Native DUAL_TUNNEL | Preserve the managed IKEv2/IPsec outer tunnel, inner WireGuard tunnel, Authorization V2 and kernel gate. The installed supervisor config has one AA URL and pinned AA key. The AA uses one signing key and local persistent state. Native gateway and optional pfSense modes exist. Neither distributed approval nor peer-selected alternate routes are demonstrated. |
+| Dashboard integration | `/api/nodes` combines discovery and ledger records. `/api/services` and `/api/tunnels` provide policy and local STANDARD tunnel entries. The Topology view uses those feeds. It can show local link entries and ledger permissions, but has no feed for authenticated remote liveness, DUAL paths, or a network-wide link graph. |
+
+A permissioned trust extension would need signer eligibility tied to an agreed
+membership version, signed transitions and independently verified checkpoints.
+Fault testing must cover a lost leader, a missing block, and a partition that
+rejoins with conflicting histories. Native authority failover must also prove
+that approvals and revocations cannot roll back or be replayed across replicas.
+Retain the existing denial behavior until equivalent guarantees are demonstrated.

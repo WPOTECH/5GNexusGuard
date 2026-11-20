@@ -10,10 +10,12 @@ import {
 import { NodeCard } from './NodeCard';
 import { ServiceCard } from './ServiceCard';
 import { TunnelCard } from './TunnelCard';
+import { Topology } from './Topology';
 import { RegisterNodeModal, ExposeServiceModal } from './Modals';
 
 const VIEWS: { id: ViewId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
+  { id: 'topology', label: 'Topology' },
   { id: 'nodes', label: 'Nodes' },
   { id: 'services', label: 'Services' },
   { id: 'tunnels', label: 'Connections' },
@@ -25,6 +27,7 @@ const VIEWS: { id: ViewId; label: string }[] = [
 export default function App() {
   const [view, setView] = useState<ViewId>('overview');
   const [status, setStatus] = useState<MeshStatus | null>(null);
+  const [nodeStatusAvailable, setNodeStatusAvailable] = useState(false);
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [services, setServices] = useState<ServiceRecord[]>([]);
   const [tunnels, setTunnels] = useState<Record<string, ActiveTunnel>>({});
@@ -47,6 +50,7 @@ export default function App() {
       api.getStatus(), api.listNodes(), api.listServices(), api.listTunnels(),
     ]);
     if (st.status === 'fulfilled') setStatus(st.value);
+    setNodeStatusAvailable(nd.status === 'fulfilled');
     if (nd.status === 'fulfilled') {
       const val = nd.value;
       setNodes(Array.isArray(val) ? val : Object.values(val as Record<string, NodeRecord>));
@@ -309,6 +313,11 @@ export default function App() {
               )}
             </>
           )}
+
+          {view === 'topology' && <Topology localId={myNodeId}
+            nodes={nodeStatusAvailable ? nodes : null} tunnels={tunnelStatusAvailable ? tunnels : null}
+            services={services} onRegister={handleRegisterNode} onRemove={handleRemoveNode}
+            onDisconnect={handleDisconnect} />}
 
           {/* ═══ NODES ═══ */}
           {view === 'nodes' && (
