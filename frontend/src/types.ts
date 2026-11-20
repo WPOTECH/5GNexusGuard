@@ -109,9 +109,9 @@ export interface RevokeRequest {
 export interface ConnectResponse {
   status: string;
   serviceId: string;
-  localEndpoint: string;
-  tunnelInterface: string;
-  remoteEndpoint: string;
+  connectTo: string;
+  tunnelIf: string;
+  peerTunnelIp: string;
 }
 
 export type ViewId = 'overview' | 'nodes' | 'services' | 'tunnels' | 'ledger';

@@ -1,5 +1,7 @@
 package com.defenderlink.mesh.tunnel;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import com.defenderlink.mesh.identity.NodeIdentity;
 import com.defenderlink.mesh.ledger.store.LedgerStore;
 import com.defenderlink.mesh.ledger.store.LedgerStore.NodeRecord;
@@ -184,18 +186,20 @@ public class TunnelManager {
     /**
      * Tear down a specific service tunnel.
      */
-    public synchronized void destroyTunnel(String serviceId) {
+    public synchronized boolean destroyTunnel(String serviceId) {
         ActiveTunnel tunnel = tunnels.get("conn:" + serviceId);
-        if (tunnel == null) return;
+        if (tunnel == null) return true;
 
         try {
             deleteOwnedInterface(tunnel.ifName);
             tunnels.remove("conn:" + serviceId, tunnel);
             log.info("Destroyed tunnel {} for service '{}'", tunnel.ifName, serviceId);
+            return true;
         } catch (Exception e) {
             tunnel.setState(TunnelState.FAILED);
             tunnel.setError("Owned interface cleanup pending");
             log.warn("Failed to clean up owned tunnel {}; retaining failed tracking", tunnel.ifName);
+            return false;
         }
     }
 
@@ -606,13 +610,18 @@ public class TunnelManager {
             this.egressPort     = egressPort;
         }
 
+        @JsonProperty("peerTunnelIp")
         public String      peerTunnelIp()                     { return peerTunnelIp; }
         public void        setPeerTunnelIp(String ip)         { this.peerTunnelIp = ip; }
+        @JsonProperty("egressPort")
         public int         egressPort()                       { return egressPort; }
+        @JsonProperty("interceptLocalPort")
         public int         interceptLocalPort()               { return interceptLocalPort; }
         public void        setInterceptLocalPort(int p)       { this.interceptLocalPort = p; }
+        @JsonProperty("state")
         public TunnelState state()                            { return state; }
         public void        setState(TunnelState s)            { this.state = s; }
+        @JsonProperty("error")
         public String      error()                            { return error; }
         public void        setError(String e)                 { this.error = e; }
         public boolean     isUp()  { return state == TunnelState.ACTIVE; }

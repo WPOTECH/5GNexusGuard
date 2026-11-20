@@ -52,9 +52,9 @@ class TunnelManagerLifecycleTest {
         var field=TunnelManager.class.getDeclaredField("tunnels");field.setAccessible(true);
         @SuppressWarnings("unchecked") Map<String,TunnelManager.ActiveTunnel> tunnels=(Map<String,TunnelManager.ActiveTunnel>)field.get(f);
         var at=new TunnelManager.ActiveTunnel("svc",f.name,"10.200.1.1/30","public",51820,"peer",TunnelManager.TunnelRole.CONNECTOR,15100);
-        tunnels.put("conn:svc",at);f.failDelete=true;f.destroyTunnel("svc");
+        tunnels.put("conn:svc",at);f.failDelete=true;assertFalse(f.destroyTunnel("svc"));
         assertEquals(TunnelManager.TunnelState.FAILED,at.state());assertTrue(tunnels.containsKey("conn:svc"));
         assertNotNull(at.error());assertTrue(f.ownedInterfaces.containsKey(f.name));
-        f.failDelete=false;f.destroyTunnel("svc");assertTrue(tunnels.isEmpty());assertTrue(f.ownedInterfaces.isEmpty());
+        f.failDelete=false;assertTrue(f.destroyTunnel("svc"));assertTrue(tunnels.isEmpty());assertTrue(f.ownedInterfaces.isEmpty());
     }
 }

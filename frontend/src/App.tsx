@@ -16,7 +16,7 @@ const VIEWS: { id: ViewId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'nodes', label: 'Nodes' },
   { id: 'services', label: 'Services' },
-  { id: 'tunnels', label: 'Tunnels' },
+  { id: 'tunnels', label: 'Connections' },
   { id: 'ledger', label: 'Ledger' },
 ];
 
@@ -28,6 +28,9 @@ export default function App() {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [services, setServices] = useState<ServiceRecord[]>([]);
   const [tunnels, setTunnels] = useState<Record<string, ActiveTunnel>>({});
+  const [selectedService, setSelectedService] = useState('');
+  const [connecting, setConnecting] = useState(false);
+  const [tunnelStatusAvailable, setTunnelStatusAvailable] = useState(false);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error'; k: number } | null>(null);
   const [showRegister, setShowRegister] = useState(false);
@@ -52,6 +55,7 @@ export default function App() {
       const val = sv.value;
       setServices(Array.isArray(val) ? val : Object.values(val as Record<string, ServiceRecord>));
     }
+    setTunnelStatusAvailable(tn.status === 'fulfilled');
     if (tn.status === 'fulfilled') setTunnels(tn.value || {});
   }, []);
 
@@ -99,10 +103,20 @@ export default function App() {
   const handleConnect = async (svcId: string) => {
     try {
       const res = await api.connect(svcId);
-      notify(`Connected to ${svcId} at ${res.localEndpoint}`);
+      if (res.status !== 'ACTIVE') throw new Error('Tunnel setup did not return an active interface');
+      notify(`Tunnel established for ${svcId}. Application endpoint ${res.connectTo}`);
       refresh();
     } catch (e: any) {
       notify(e.message || 'Connection failed', 'error');
+    }
+  };
+
+  const connectSelected = async () => {
+    setConnecting(true);
+    try {
+      await handleConnect(selectedService);
+    } finally {
+      setConnecting(false);
     }
   };
 
@@ -138,6 +152,12 @@ export default function App() {
   const activeSvcs = services.filter(s => s.active).length;
   const activeTunnels = tunnelArr.filter(([, t]) => t.state === 'ACTIVE').length;
   const myNodeId = status?.nodeId || '';
+
+  const connectableServices = myNodeId ? services.filter(service =>
+    service.active && service.ownerNodeId !== myNodeId &&
+    service.allowedNodes?.includes(myNodeId)
+  ) : [];
+  const selectedIsEligible = connectableServices.some(service => service.serviceId === selectedService);
 
   const raftColor = status?.raftState === 'LEADER' ? T.accent
     : status?.raftState === 'CANDIDATE' ? T.warn : T.info;
@@ -282,7 +302,7 @@ export default function App() {
                   </SectionHeader>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(380px,1fr))', gap: 12 }}>
                     {tunnelArr.slice(0, 4).map(([id, t]) => (
-                      <TunnelCard key={id} id={id} tunnel={t} onDisconnect={handleDisconnect} />
+                      <TunnelCard key={id} tunnel={t} onDisconnect={handleDisconnect} />
                     ))}
                   </div>
                 </div>
@@ -330,13 +350,29 @@ export default function App() {
           {/* ═══ TUNNELS ═══ */}
           {view === 'tunnels' && (
             <>
-              <SectionHeader title={`Active tunnels (${tunnelArr.length})`} />
+              <SectionHeader title="Connections" />
+              <Card style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+                  <label htmlFor="connection-service">STANDARD protected service</label>
+                  <select id="connection-service" value={selectedIsEligible ? selectedService : ''}
+                    disabled={connecting} onChange={event => setSelectedService(event.target.value)}>
+                    <option value="">Select a service</option>
+                    {connectableServices.map(service => (
+                      <option key={service.serviceId} value={service.serviceId}>{service.serviceId}</option>
+                    ))}
+                  </select>
+                  <Btn variant="primary" disabled={!selectedIsEligible || connecting} onClick={connectSelected}>
+                    {connecting ? 'Connecting…' : 'Connect'}
+                  </Btn>
+                </div>
+              </Card>
+              {!tunnelStatusAvailable && <p role="status">Live tunnel status is unavailable.</p>}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(380px,1fr))', gap: 12 }}>
-                {tunnelArr.map(([id, t]) => (
-                  <TunnelCard key={id} id={id} tunnel={t} onDisconnect={handleDisconnect} />
+                {tunnelStatusAvailable && tunnelArr.map(([id, t]) => (
+                  <TunnelCard key={id} tunnel={t} onDisconnect={handleDisconnect} />
                 ))}
               </div>
-              {tunnelArr.length === 0 && <Empty text="No active tunnels. Connect to a service to create one." />}
+              {tunnelStatusAvailable && tunnelArr.length === 0 && <Empty text="No active tunnels. Connect to a service to create one." />}
             </>
           )}
 

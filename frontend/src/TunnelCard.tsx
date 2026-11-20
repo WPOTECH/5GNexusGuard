@@ -5,12 +5,11 @@ import type { ActiveTunnel } from './types';
 import { short } from './utils';
 
 interface Props {
-  id: string;
   tunnel: ActiveTunnel;
   onDisconnect: (id: string) => void;
 }
 
-export function TunnelCard({ id, tunnel, onDisconnect }: Props) {
+export function TunnelCard({ tunnel, onDisconnect }: Props) {
   const [confirmDisc, setConfirmDisc] = useState(false);
   const stColor = tunnel.state === 'ACTIVE' ? T.accent : tunnel.state === 'FAILED' ? T.danger : T.warn;
 
@@ -47,18 +46,18 @@ export function TunnelCard({ id, tunnel, onDisconnect }: Props) {
         }}>{tunnel.error}</div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+      {tunnel.role === 'CONNECTOR' && <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
         {confirmDisc ? (
           <>
             <Btn small variant="ghost" onClick={() => setConfirmDisc(false)}>Cancel</Btn>
-            <Btn small variant="danger" onClick={() => { onDisconnect(id); setConfirmDisc(false); }}>
+            <Btn small variant="danger" onClick={() => { onDisconnect(tunnel.serviceId); setConfirmDisc(false); }}>
               Confirm
             </Btn>
           </>
         ) : (
           <Btn small variant="danger" onClick={() => setConfirmDisc(true)}>Disconnect</Btn>
         )}
-      </div>
+      </div>}
     </Card>
   );
 }

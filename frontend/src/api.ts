@@ -56,8 +56,8 @@ export const api = {
 
   // Tunnels
   listTunnels: () => get<Record<string, ActiveTunnel>>('/tunnels'),
-  connect: (serviceId: string) => post<ConnectResponse>(`/connect/${serviceId}`),
-  disconnect: (serviceId: string) => post<{ status: string }>(`/disconnect/${serviceId}`),
+  connect: (serviceId: string) => post<ConnectResponse>(`/connect/${encodeURIComponent(serviceId)}`),
+  disconnect: (serviceId: string) => post<{ status: string }>(`/disconnect/${encodeURIComponent(serviceId)}`),
 
   // Ledger
   getBlock: (index: number) => get<Block>(`/ledger/block/${index}`),
@@ -70,6 +70,6 @@ export const api = {
   removeNode:    (nodeId: string) =>
       del<{ status: string }>(`/nodes/${nodeId}`),
   deleteTunnel:  (serviceId: string) =>
-      del<{ status: string }>(`/tunnels/${serviceId}`),
+      del<{ status: string }>(`/tunnels/${encodeURIComponent(serviceId)}`),
 
 };

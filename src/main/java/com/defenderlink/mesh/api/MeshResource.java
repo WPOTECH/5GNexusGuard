@@ -186,7 +186,9 @@ public class MeshResource {
     @POST @Path("/disconnect/{serviceId}")
     public Response disconnectService(@PathParam("serviceId") String serviceId) {
         interceptProxy.stopIntercept(serviceId);
-        tunnelManager.destroyTunnel(serviceId);
+        if (!tunnelManager.destroyTunnel(serviceId)) {
+            return Response.status(503).entity(Map.of("error", "Tunnel interface cleanup is pending")).build();
+        }
         return Response.ok(Map.of("status", "disconnected", "serviceId", serviceId)).build();
     }
 
@@ -299,9 +301,7 @@ public class MeshResource {
     /** Delete/revoke a tunnel (connector side) */
     @DELETE @Path("/tunnels/{serviceId}")
     public Response deleteTunnel(@PathParam("serviceId") String serviceId) {
-        interceptProxy.stopIntercept(serviceId);
-        tunnelManager.destroyTunnel(serviceId);
-        return Response.ok(Map.of("status", "disconnected", "serviceId", serviceId)).build();
+        return disconnectService(serviceId);
     }
 
     // =========================================================================
