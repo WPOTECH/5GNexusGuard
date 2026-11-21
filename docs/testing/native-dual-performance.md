@@ -431,3 +431,51 @@ denial. Those live regressions and an independent security review remain
 pending. These short measurements establish observed coverage for the six
 grants. They do not qualify sustained reliability or the full performance matrix.
 Raw traces and map samples remain in the private direct-map runtime evidence.
+
+### Persistent VICI — six accepted traffic windows
+
+The NIC-free guest verified the installed supervisor, publisher and VICI
+adapter against archive SHA-256
+`a68ff9b04e08e544059ca9bee9bd06bd83d7adc42f610f8366de8020bb25b2d7`.
+The suite used six distinct signed Authorization V2 grants. The four TCP
+streams in each window delivered verified data, and all windows passed the
+unchanged continuous-coverage check.
+
+| Window | Requested seconds | Verified echo Mbps | Verified bytes | Minimum observed renewal margin (ms) |
+|---|---:|---:|---:|---:|
+| 1 | 0.50 | 367.663 | 22,992,188 | 190.874 |
+| 2 | 0.50 | 345.945 | 21,629,700 | 163.012 |
+| 3 | 0.50 | 355.628 | 22,235,804 | 183.908 |
+| 4 | 0.50 | 361.701 | 22,613,880 | 233.978 |
+| 5 | 0.50 | 347.096 | 21,704,828 | 217.139 |
+| 6 | 1.25 | 305.135 | 47,683,852 | 187.323 |
+
+There were 18 completed publishing cycles overlapping the windows, with
+four persistent VICI reconciliations in each. Across 72 VICI operations,
+minimum, median and maximum latency were 0.731, 4.102 and 36.406 ms.
+The maximum sum of four VICI operations in a cycle was 42.411 ms, compared
+with 385.370 ms in the prior subprocess build. Maximum supervisor cycle
+time dropped from 437.710 to 330.873 ms and minimum independently observed
+renewal margin increased from 56.748 to 163.012 ms. These are observed
+extremes from separate runs. The longest persistent VICI cycle spent
+310.540 ms in tunnel verification; WireGuard route/address command times
+summed to 281.603 ms and XFRM command times to 231.440 ms in overlapping
+worker threads. Maximum direct BPF update and readback was 0.939 ms.
+The sampler recorded no expired health entries. Both SYN health-deadline
+rejection counters remained zero.
+
+QEMU exited 0. Guest cleanup reported no remaining BPF pins, namespaces or
+supervisor cleanup errors. The backing disk hash and all 24 tracked target
+modifications were preserved. Strict host snapshot equality failed because
+one host veth disappeared and another appeared, with corresponding address
+and route changes. The runner used `-nic none` and issued no host network
+changes. Raw evidence remains in the private persistent-VICI runtime.
+
+The prepared installed probe contained positive windows only. The prepared
+VICI socket tests exercise change events, peer credentials, malformed data,
+disconnect and reconnect. Existing publisher and authorization tests cover
+stale evidence and kernel boundaries at their respective test layers. No
+prepared installed persistent-VICI packet-fault harness was present in the
+approved seed. Event handling under live rekey, installed packet denial and
+independent review remain unqualified. This run does not establish sustained
+reliability or compare total STANDARD and DUAL performance.
