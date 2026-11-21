@@ -412,7 +412,8 @@ ESP counter checks before the publisher accepted its evidence.
 There were zero sampled expirations. The two SYN health-deadline counters
 remained zero across the suite. The longest cycle spent 420.834 ms in
 parallel tunnel validation. Its four VICI subprocesses took 385.370 ms
-combined and VICI was the last worker to finish each snapshot. The separate
+combined and VICI was the last worker to finish the post-echo snapshot.
+WireGuard finished the pre-echo snapshot 4.361 ms after VICI. The separate
 stage sums overlap and do not add to wall time. The maximum wake delay after
 both the scheduled target and the preceding cycle end was 5.567 microseconds
 among overlapping cycle starts.
