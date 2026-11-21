@@ -355,3 +355,78 @@ The trace isolates the dominant stage in this passing run. The prior
 intermittent expiry lacked a stage trace. The present evidence does not
 justify changing the wake-up policy or claiming permanent coverage.
 The full performance matrix was outside the single-run approval.
+
+### Parallel verifier acceptance attempt — first window stopped
+
+The guest verified the installed parallel-verifier package. The first
+four-stream window started after grant readiness. The supervisor's final
+cycle started at BOOTTIME 45667848281 ns. Authorization validation took
+1.992 ms and the parallel health challenge took 470.972 ms. Its successful
+result required the matching identities and SPIs and increasing counters.
+The previous verified health deadline was 46151301735 ns. Publication began
+at 46140877944 ns, and `bpftool map update` received a 10.392 ms timeout budget.
+The subprocess call lasted 16.431 ms and timed out waiting for child exit.
+There was no successful readback for this attempted publication. The
+supervisor entered revocation and cleanup and exited with status 1.
+
+The longest completed cycle in the retained trace was 242.678 ms. The final
+cycle had no completion event and spent 473.030 ms before entering publication.
+Process disappearance prevented the benchmark harness from saving its pending
+sample and map trace. Because a subprocess timeout can occur after the write
+and before child exit, the attempted map update's effect and any expired
+interval are unknown. Subsequent windows did not run.
+
+The guest stopped with QEMU exit 0. Post-failure cleanup confirmed no installed
+pins or guest namespaces. Host network and backing disk snapshots matched.
+Private evidence is under
+`/home/wpotech/5gnexusguard-p24-parallel-20261120T175921Z/runtime-01/`.
+
+The follow-up candidate replaces shell-based timed health publication with
+an in-process BPF map update and byte-for-byte lookup. It checks the pinned
+map ABI and remaining deadline before writing and reading. The harness now
+retains partial traffic and map observations when a tracked process exits,
+and attempts native stop even if signed revocation cannot complete. The
+500 ms health window and signed authorization are unchanged. The follow-up
+package and live packet behavior require a new isolated validation.
+
+### Direct BPF publication — six accepted windows
+
+The approved NIC-free VM installed the rebuilt archive (SHA-256
+`f9178e8c70ba2fbbefd997d2b914bc3cdc391f5b7b2940c9d36933c6b4ed9ac7`).
+The installed supervisor and publisher matched the build. All six windows
+used four 4 KiB TCP streams and distinct signed Authorization V2 grants.
+The unchanged continuous coverage rule passed in each window. Fourteen
+completed health cycles overlapped the windows. Each showed three overlapping
+health commands and completed the required before/after identity, SPI and
+ESP counter checks before the publisher accepted its evidence.
+
+| Window | Requested seconds | Verified echo Mbps | Guest busy CPU | Longest overlapping cycle (ms) | Longest direct BPF update and readback (ms) | Minimum observed renewal margin (ms) |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 0.50 | 361.231 | 96.04% | 400.422 | 0.942 | 92.811 |
+| 2 | 0.50 | 300.601 | 93.10% | 361.680 | 0.766 | 155.116 |
+| 3 | 0.50 | 334.500 | 95.05% | 437.710 | 2.871 | 60.801 |
+| 4 | 0.50 | 390.915 | 97.55% | 416.025 | 1.096 | 79.473 |
+| 5 | 0.50 | 333.380 | 95.57% | 430.083 | 1.711 | 56.748 |
+| 6 | 1.25 | 348.499 | 94.39% | 386.966 | 1.226 | 109.254 |
+
+There were zero sampled expirations. The two SYN health-deadline counters
+remained zero across the suite. The longest cycle spent 420.834 ms in
+parallel tunnel validation. Its four VICI subprocesses took 385.370 ms
+combined and VICI was the last worker to finish each snapshot. The separate
+stage sums overlap and do not add to wall time. The maximum wake delay after
+both the scheduled target and the preceding cycle end was 5.567 microseconds
+among overlapping cycle starts.
+
+QEMU returned 0. Supervisor cleanup reported no errors, the guest had no
+remaining test namespaces or BPF pins, and the backing disk hash matched.
+Strict host-network equality failed. The snapshot differences were confined
+to one added host veth on an existing container bridge and its associated
+IPv6 routes. The QEMU command used `-nic none`; the runner issued no host
+network changes. All 24 tracked target modifications were preserved.
+
+A total of 140 focused unprivileged tests passed. Positive windows do not
+exercise unauthorized traffic, crash, stale evidence, or revocation packet
+denial. Those live regressions and an independent security review remain
+pending. These short measurements establish observed coverage for the six
+grants. They do not qualify sustained reliability or the full performance matrix.
+Raw traces and map samples remain in the private direct-map runtime evidence.
