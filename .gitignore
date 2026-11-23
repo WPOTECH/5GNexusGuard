@@ -1,0 +1,13 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# BPF build artifacts
+*.o
+*.ll
+*.bc
+
+# Target directory (never committed)
+target/
