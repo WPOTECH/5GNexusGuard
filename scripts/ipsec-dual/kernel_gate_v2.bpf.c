@@ -288,8 +288,8 @@ drop:
 SEC("tc/wg_ingress")
 int wg_ingress(struct __sk_buff *skb)
 {
-	struct iphdr *ip;
-	struct udphdr *udp;
+	struct iphdr ip;
+	struct udphdr udp;
 	__u32 hdr_size = sizeof(struct ethhdr) + sizeof(struct iphdr);
 	__u16 h_proto = 0;
 
@@ -305,27 +305,27 @@ int wg_ingress(struct __sk_buff *skb)
 		return TC_ACT_SHOT;
 
 	/* Load IP header */
-	if (bpf_skb_load_bytes(skb, sizeof(struct ethhdr), ip, sizeof(*ip)) < 0)
+	if (bpf_skb_load_bytes(skb, 14, &ip, sizeof(ip)) < 0)
 		return TC_ACT_SHOT;
 
 	/* Only process IPv4 */
-	if (ip->version != 4)
+	if (ip.version != 4)
 		return TC_ACT_SHOT;
 
 	/* Only process UDP */
-	if (ip->protocol != IPPROTO_UDP)
+	if (ip.protocol != IPPROTO_UDP)
 		return TC_ACT_SHOT;
 
 	/* Load UDP header */
-	if (bpf_skb_load_bytes(skb, hdr_size, udp, sizeof(*udp)) < 0)
+	if (bpf_skb_load_bytes(skb, hdr_size, &udp, sizeof(udp)) < 0)
 		return TC_ACT_SHOT;
 
 	/* Validate source port is non-zero */
-	if (udp->source == 0)
+	if (udp.source == 0)
 		return TC_ACT_SHOT;
 
 	/* Check if this is a WireGuard packet (destination port 51820) */
-	if (bpf_ntohs(udp->dest) != WG_PORT)
+	if (bpf_ntohs(udp.dest) != WG_PORT)
 		return TC_ACT_SHOT;
 
 	/* Extract source IP for peer identity */
@@ -337,7 +337,7 @@ int wg_ingress(struct __sk_buff *skb)
 	struct peer_key pkey = { 0 };
 	pkey.peer = (__force __u32)src_ip;
 	pkey.resource = 0;
-	pkey.port = bpf_ntohs(udp->dest);  /* 51820 */
+	pkey.port = bpf_ntohs(udp.dest);  /* 51820 */
 	pkey.flags = 0;
 
 	/* Look up peer state in renewal_state by src IP */
@@ -385,7 +385,10 @@ unlock_drop:
 SEC("tc/resource_ingress")
 int resource_ingress(struct __sk_buff *skb)
 {
-	struct iphdr *ip;
+	struct iphdr ip;
+	struct tcphdr tcp;
+	struct udphdr udp;
+	struct icmphdr icmp;
 	__u32 hdr_size = sizeof(struct ethhdr) + sizeof(struct iphdr);
 	__u16 h_proto = 0;
 
@@ -400,53 +403,49 @@ int resource_ingress(struct __sk_buff *skb)
 		return TC_ACT_SHOT;
 
 	/* Load IP header */
-	ip = 0;
-	if (bpf_skb_load_bytes(skb, sizeof(struct ethhdr), ip, sizeof(*ip)) < 0)
+	if (bpf_skb_load_bytes(skb, sizeof(struct ethhdr), &ip, sizeof(ip)) < 0)
 		return TC_ACT_SHOT;
 
 	/* Only process IPv4 */
-	if (ip->version != 4)
+	if (ip.version != 4)
 		return TC_ACT_SHOT;
 
-	__u8 proto = ip->protocol;
+	__u8 proto = ip.protocol;
 	__be32 src_ip = 0;
 	if (parse_ipv4_src(skb, &src_ip) != 0)
 		return TC_ACT_SHOT;
 
 	if (proto == IPPROTO_TCP) {
-		struct tcphdr *tcp = 0;
 		if (skb->len < hdr_size + sizeof(struct tcphdr))
 			return TC_ACT_SHOT;
-		if (bpf_skb_load_bytes(skb, hdr_size, tcp, sizeof(*tcp)) < 0)
+		if (bpf_skb_load_bytes(skb, hdr_size, &tcp, sizeof(tcp)) < 0)
 			return TC_ACT_SHOT;
 
 		/* Validate source port non-zero */
-		if (bpf_ntohs(tcp->source) == 0)
+		if (bpf_ntohs(tcp.source) == 0)
 			return TC_ACT_SHOT;
 
 		/* Check auth/health/HTTP ports */
-		__u16 src_port = bpf_ntohs(tcp->source);
+		__u16 src_port = bpf_ntohs(tcp.source);
 		if (src_port != AUTH_PORT && src_port != HEALTH_PORT && src_port != RESOURCE_PORT)
 			return TC_ACT_SHOT;
 
 	} else if (proto == IPPROTO_UDP) {
-		struct udphdr *udp = 0;
 		if (skb->len < hdr_size + sizeof(struct udphdr))
 			return TC_ACT_SHOT;
-		if (bpf_skb_load_bytes(skb, hdr_size, udp, sizeof(*udp)) < 0)
+		if (bpf_skb_load_bytes(skb, hdr_size, &udp, sizeof(udp)) < 0)
 			return TC_ACT_SHOT;
 
-		if (udp->source == 0)
+		if (udp.source == 0)
 			return TC_ACT_SHOT;
 
 	} else if (proto == IPPROTO_ICMP) {
-		struct icmphdr *icmp = 0;
 		if (skb->len < hdr_size + sizeof(struct icmphdr))
 			return TC_ACT_SHOT;
-		if (bpf_skb_load_bytes(skb, hdr_size, icmp, sizeof(struct icmphdr)) < 0)
+		if (bpf_skb_load_bytes(skb, hdr_size, &icmp, sizeof(icmp)) < 0)
 			return TC_ACT_SHOT;
 
-		if (icmp->type != ICMP_ECHOREPLY && icmp->type != ICMP_ECHO)
+		if (icmp.type != ICMP_ECHOREPLY && icmp.type != ICMP_ECHO)
 			return TC_ACT_SHOT;
 
 	} else {

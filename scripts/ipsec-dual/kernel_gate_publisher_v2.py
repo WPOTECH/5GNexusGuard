@@ -91,10 +91,10 @@ class AtomicHealthMap:
             ('retval', ctypes.c_uint32),
             ('data_size_in', ctypes.c_uint32),
             ('data_size_out', ctypes.c_uint32),
-            ('data_in', ctypes.c_char_p),
-            ('data_out', ctypes.c_char_p),
-            ('ctx_in', ctypes.c_char_p),
-            ('ctx_out', ctypes.c_char_p),
+            ('data_in', ctypes.c_uint64),
+            ('data_out', ctypes.c_uint64),
+            ('ctx_in', ctypes.c_uint64),
+            ('ctx_out', ctypes.c_uint64),
         ]
 
     class InfoAttr(ctypes.Structure):
@@ -125,14 +125,19 @@ class AtomicHealthMap:
         attr.retval = 0
         attr.data_size_in = HEALTH_SIZE
         attr.data_size_out = HEALTH_SIZE
-        attr.data_in = value
-        attr.data_out = b''
+        value_buf = ctypes.create_string_buffer(value, HEALTH_SIZE)
+        attr.data_in = ctypes.cast(value_buf, ctypes.c_void_p).value  # pointer address
+        attr.data_out = 0
+
+        # Derive deadline_ns from the health value for the request deadline field
+        deadline_ns = struct.unpack('<QQQIIHH', value[:36])[1]  # index 1 = deadline_ns
 
         req_data = self.REQUEST.pack(
             HEALTH_OP_PUBLISH, generation, 0, auth_deadline,
-            checked, 0, publish_before, 0
+            checked, deadline_ns, publish_before, 0
         )
-        attr.ctx_in = req_data
+        buf = ctypes.create_string_buffer(req_data, REQUEST_SIZE)
+        attr.ctx_in = ctypes.cast(buf, ctypes.c_void_p).value  # store as uint64 pointer
 
         result = self._call(BPF_PROG_TEST_RUN, attr)
         if result <= 0 or attr.retval <= 0:
@@ -149,13 +154,15 @@ class AtomicHealthMap:
         attr.retval = 0
         attr.data_size_in = HEALTH_SIZE
         attr.data_size_out = HEALTH_SIZE
-        attr.data_in = value
-        attr.data_out = b''
+        value_buf = ctypes.create_string_buffer(value, HEALTH_SIZE)
+        attr.data_in = ctypes.cast(value_buf, ctypes.c_void_p).value  # pointer address
+        attr.data_out = 0
 
         req_data = self.REQUEST.pack(
             HEALTH_OP_REVOKE, generation, 0, 0, 0, 0, 0, 0
         )
-        attr.ctx_in = req_data
+        buf = ctypes.create_string_buffer(req_data, REQUEST_SIZE)
+        attr.ctx_in = ctypes.cast(buf, ctypes.c_void_p).value  # store as uint64 pointer
 
         result = self._call(BPF_PROG_TEST_RUN, attr)
         if result <= 0 or attr.retval <= 0:
