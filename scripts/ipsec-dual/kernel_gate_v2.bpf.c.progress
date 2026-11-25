@@ -1,0 +1,58 @@
+kernel_gate_v2.bpf.c Progress Checkpoint
+Updated: 2026-11-25T15:20 CST
+
+## Compilation Status
+- kernel_gate_v2.bpf.c: COMPILES CLEAN (clang 18.1.3, BPF target)
+- Object: 11,576 bytes at build/kernel_gate_v2.bpf.o
+- No warnings, no errors
+
+## Changes Made
+1. Added #include <linux/pkt_cls.h> for TC_ACT_OK/SHOT constants
+2. Added #include <linux/if_ether.h> for ethhdr/ETH_P_IP
+3. Added #include <linux/udp.h> for udphdr
+4. Added #include <linux/tcp.h> for tcphdr
+5. Added #include <linux/icmp.h> for icmphdr
+6. Defined BPF-side structs (heartbeat, peer_key, authorization, health_state, locked_health)
+   — separate from kernel_gate_transition.h header to avoid glibc conflicts
+7. Fixed ICMP_ECHOREQUEST → ICMP_ECHO (correct Linux constant)
+8. Used bpf_helpers.h libbpf patterns (bpf_skb_load_bytes, bpf_map_lookup_elem, bpf_spin_lock)
+9. Removed health_transition function (user-space only)
+10. Moved all map-dependent code into .bpf.c
+
+## Map Layout (verified via DWARF/objdump)
+- health_map: ARRAY<__u32, health_state>, max 1 entry, key 0
+  → health_state has: revision, generation, auth_deadline, epoch, checked, deadline, closed, resource, port, flags
+- renewal_state: HASH<peer_key, locked_health>, max 256 entries
+  → peer_key = {peer, resource, port, flags}
+  → locked_health = {spinlock, health_state}
+- auth_map: HASH<peer_key, authorization>, max 256 entries
+  → authorization = {epoch, deadline_ns, peer, resource, port, flags}
+- verdict_map: ARRAY<__u32, __s32>, max 1 entry
+
+## BPF Programs (3 sections)
+1. tc/health_control: Health-control packet classifier
+   - Reads packet headers (eth+ip), loads operation/epoch/auth_deadline/deadline fields
+   - Validates epoch progression, auth_deadline > deadline, state not closed
+   - Updates health_map on success, returns TC_ACT_OK/SHOT
+
+2. tc/wg_ingress: WireGuard ingress classifier (UDP/51820)
+   - Validates IPv4/UDP, non-zero source port
+   - Checks peer state from renewal_state (spinlock-protected)
+   - Validates auth_deadline/health_deadline, resource/port/flags non-zero
+   - resource==RESOURCE_PORT, port==WG_PORT
+
+3. tc/resource_ingress: Multi-protocol health port classifier
+   - Handles TCP (auth/health/resource ports), UDP (non-zero src), ICMP (echo/reply)
+   - Validates peer state from renewal_state
+   - Returns TC_ACT_OK if authorized
+
+## Helper Calls (verified in bytecode)
+- bpf_map_lookup_elem (helper 1): 3 map lookups (health_map, renewal_state ×2)
+- bpf_skb_load_bytes (helper 26): 6+ packet data reads
+- bpf_ktime_get_boot_ns (helper 125): 1 call per wg_ingress/resource_ingress
+- bpf_spin_lock/unlock: 2 calls per wg_ingress/resource_ingress
+
+## Remaining Work
+- User-space loader integration (needs to load these 3 programs)
+- Testing on real kernel (isolated_enforcement.py needs BPF object path)
+- Commit and push to GitHub feature branch

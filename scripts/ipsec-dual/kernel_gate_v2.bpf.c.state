@@ -1,0 +1,46 @@
+kernel_gate_v2.bpf.c — Final State
+Date: 2026-11-25T15:20 CST
+Branch: feature/bpf-reconstruction-v2 (11d8e9b)
+
+## Compilation
+- DEBUG build: 20,008 bytes (-g -O2, with DWARF)
+- RELEASE build: 2,544 bytes (-O2, no debug)
+- Both compile cleanly with clang 18.1.3 BPF target
+
+## Key Fixes Applied
+1. Added linux/pkt_cls.h → TC_ACT_OK, TC_ACT_SHOT defined
+2. Added bpf_spin_lock unlock via bpf_helpers.h (already present)
+3. health_state struct now includes resource/port/flags for peer authorization
+4. ICMP_ECHOREQUEST → ICMP_ECHO (correct Linux constant)
+5. All BPF helpers use libbpf patterns (callx indirect calls, patched by loader)
+6. kernel_gate_transition.h __BPF__ guard prevents glibc conflicts
+
+## Programs (3 TC classifiers)
+- tc/health_control:  health-control ingress, epoch validation, state update
+- tc/wg_ingress:      WireGuard UDP/51820, peer resource/port/flags check
+- tc/resource_ingress: multi-protocol TCP/UDP/ICMP, peer authorization
+
+## Maps (4 total)
+- renewal_state: HASH<peer_key, locked_health>, 256 entries, spinlock-protected
+- health_map: ARRAY<__u32, health_state>, 1 entry
+- auth_map: HASH<peer_key, authorization>, 256 entries  
+- verdict_map: ARRAY<__u32, __s32>, 1 entry
+
+## User-Space Tests
+- test_kernel_gate_publisher_v2.py: 9/9 PASS
+- kernel_gate_publisher_v2.py: HEALTH/REQUEST pack/unpack verified
+
+## Known Issues
+- Struct size mismatch: publisher heartbeat (40 bytes) vs BPF health_state (56 bytes)
+  → BPF reads uninitialized fields at offsets 40-55 of heartbeat packet
+  → Fix required: either extend heartbeat or pad health_state access in BPF
+- No GitHub remote configured → push to canonical branch blocked
+  → Branch feature/bpf-reconstruction-v2 exists locally, ready for push once remote is set
+- wg_ingress/resource_ingress use pkey={0,0,0,0} placeholder — needs real peer extraction from packet headers
+
+## Remaining Tasks
+- [ ] Add GitHub remote and push
+- [ ] Fix struct size mismatch (40B vs 56B)
+- [ ] Implement packet header parsing for wg_ingress (extract peer IP → key)
+- [ ] Load and test on live kernel
+- [ ] Wire loader_only_probe.py to load all 3 programs
