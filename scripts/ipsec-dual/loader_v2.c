@@ -19,6 +19,12 @@ static const char *TC_PROG_NAMES[] = {
 };
 #define PROG_COUNT (sizeof(TC_PROG_NAMES) / sizeof(TC_PROG_NAMES[0]))
 
+/* Remove existing BPF map pin at the given path (ignores ENOENT) */
+static void unlink_pin(const char *pin_path)
+{
+	unlink(pin_path);
+}
+
 int main(int argc, char **argv)
 {
 	struct bpf_object *obj;
@@ -42,6 +48,22 @@ int main(int argc, char **argv)
 	file = (argc >= 3) ? argv[2] : "kernel_gate_v2.bpf.o";
 	fprintf(stderr, "Loading %s on %s (ifindex=%d)...\n", file, argv[1], ifindex);
 
+	/* Detach all existing BPF TC programs on this interface first */
+	{
+		struct bpf_tc_hook h = { .sz = sizeof(h), .ifindex = ifindex, .attach_point = BPF_TC_INGRESS };
+		struct bpf_tc_opts d = { .sz = sizeof(d) };
+		ret = bpf_tc_hook_create(&h);
+		if (ret >= 0 || errno == EEXIST) {
+			ret = bpf_tc_query(&h, &d);
+			if (ret == 0 && d.prog_fd > 0) {
+				bpf_tc_detach(&h, &d);
+				fprintf(stderr, "  Detached existing TC programs from %s\n", argv[1]);
+			}
+			bpf_tc_hook_destroy(&h);
+		}
+	}
+	sleep(1);
+
 	/* Increase memlock */
 	struct rlimit rl = { .rlim_cur = RLIM_INFINITY, .rlim_max = RLIM_INFINITY };
 	setrlimit(RLIMIT_MEMLOCK, &rl);
@@ -62,6 +84,9 @@ int main(int argc, char **argv)
 			bpf_program__set_type(prog, BPF_PROG_TYPE_SCHED_CLS);
 		} else if (strncmp(sec, "xdp/", 4) == 0) {
 			bpf_program__set_type(prog, BPF_PROG_TYPE_XDP);
+		} else if (strstr(sec, "_tc")) {
+			/* Custom _tc suffix sections are also sched_cls */
+			bpf_program__set_type(prog, BPF_PROG_TYPE_SCHED_CLS);
 		}
 	}
 
@@ -74,6 +99,31 @@ int main(int argc, char **argv)
 	}
 	fprintf(stderr, "OK: All BPF programs loaded into kernel.\n");
 
+	/* Pin maps to /sys/fs/bpf/nexus_<mapname> */
+	const char *map_names[] = {"health_map", "renewal_state", NULL};
+	struct bpf_map *map;
+	bpf_object__for_each_map(map, obj) {
+		int i;
+		for (i = 0; map_names[i]; i++) {
+			if (strcmp(bpf_map__name(map), map_names[i]) == 0) {
+				/* Unpin existing entry first (EEXIST is fatal to libbpf pinning) */
+				char pin_path[256];
+				snprintf(pin_path, sizeof(pin_path), "/sys/fs/bpf/nexus_%s", map_names[i]);
+				unlink_pin(pin_path);
+
+				/* Pin maps to /sys/fs/bpf/nexus_<mapname> */
+				snprintf(pin_path, sizeof(pin_path), "/sys/fs/bpf/nexus_%s", map_names[i]);
+				ret = bpf_map__pin(map, pin_path);
+				if (ret) {
+					fprintf(stderr, "  Warning: failed to pin map %s: %s\n",
+						map_names[i], strerror(errno));
+				} else {
+					fprintf(stderr, "  Pinned map %s -> %s\n", map_names[i], pin_path);
+				}
+				break;
+			}
+		}
+	}
 	/* Print loaded programs */
 	bpf_object__for_each_program(prog, obj) {
 		const char *name = bpf_program__name(prog);
@@ -111,13 +161,23 @@ int main(int argc, char **argv)
 			if (!hook_created) {
 				ret = bpf_tc_hook_create(&hook);
 				if (ret < 0) {
-					fprintf(stderr, "  %s: bpf_tc_hook_create failed: %s\n",
-						TC_PROG_NAMES[i], strerror(errno));
-					continue;
+					fprintf(stderr, "  DEBUG: bpf_tc_hook_create returned %d, errno=%d EBUSY=%d\n", 
+						ret, errno, EBUSY);
+					if (errno == EEXIST) {
+						fprintf(stderr, "  TC qdisc already exists, reusing\n");
+						hook_created = 1;
+						ret = 0;
+					} else {
+						fprintf(stderr, "  %s: bpf_tc_hook_create failed: %s\n",
+							TC_PROG_NAMES[i], strerror(errno));
+						continue;
+					}
 				}
-				hook_created = 1;
-				fprintf(stderr, "  TC hook created on %s (ifindex=%d)\n",
-					argv[1], ifindex);
+				if (hook_created == 0) {
+					hook_created = 1;
+					fprintf(stderr, "  TC hook created on %s (ifindex=%d)\n",
+						argv[1], ifindex);
+				}
 			}
 
 			/* Attach program to the shared hook */

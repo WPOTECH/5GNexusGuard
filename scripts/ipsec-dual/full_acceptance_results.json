@@ -1,0 +1,66 @@
+{
+  "setup_tc_ns": {
+    "ok": true,
+    "detail": "ns_tc+veth pair ready"
+  },
+  "T1_bcc_load": {
+    "ok": true,
+    "detail": "Loading BPF program via bcc...\nProgram loaded: fd=4\nFound veth_tc2 with ifindex=37\nNew-format TC attach failed: No such file or directory (errno=2)\nOld-format TC attach also failed: No such file or di"
+  },
+  "T2_scapy_send": {
+    "ok": true,
+    "detail": "PACKETS_SENT:5\n  SENT: wg_authorized\n  SENT: unauth_src\n  SENT: wrong_port\n  SENT: icmp_authorized\n  SENT: tcp_health_port\nDONE\nWARNING: This interface is not specified in any provider ! See conf.ifac"
+  },
+  "T2_tc_counters": {
+    "ok": true,
+    "detail": "TC counters: Cannot find device \"veth_tc\""
+  },
+  "T2_qdisc_stats": {
+    "ok": true,
+    "detail": "Cannot find device \"veth_tc\""
+  },
+  "T2_burst_send": {
+    "ok": true,
+    "detail": "BURST_SENT:5"
+  },
+  "T2_post_burst_counters": {
+    "ok": true,
+    "detail": "Cannot find device \"veth_tc\""
+  },
+  "T3_compile": {
+    "ok": true,
+    "detail": "compile: ok"
+  },
+  "T3_ip_load": {
+    "ok": true,
+    "detail": "Loading BPF program via bcc...\nProgram loaded: fd=4\nFound veth_tc2 with ifindex=37\nNew-format TC attach failed: No such file or directory (errno=2)\nOld-format TC attach also failed: No such file or directory (errno=2)\nNOTE: BPF_PROG_ATTACH to TC may not be supported in this container/kernel\nBPF prog"
+  },
+  "T3_elf_header": {
+    "ok": true,
+    "detail": "ELF Header:\n  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 \n  Class:                             ELF64\n  Data:                              2's complement, little endian\n  Version:        "
+  },
+  "T3_section_header": {
+    "ok": true,
+    "detail": "sections: 4783 chars"
+  },
+  "T3_symbols": {
+    "ok": true,
+    "detail": "symbols: 3152 chars"
+  },
+  "T3_gen_skeleton": {
+    "ok": true,
+    "detail": "skeleton: 336 chars"
+  },
+  "T3_prog_show": {
+    "ok": true,
+    "detail": "rt_filters: 0, tc_filters: 0, bcc_load: True"
+  },
+  "T3_dump_xlated": {
+    "ok": true,
+    "detail": "xlated: 1767 chars"
+  },
+  "T3_dmesg_verifier": {
+    "ok": true,
+    "detail": "raw dmesg available: True"
+  }
+}

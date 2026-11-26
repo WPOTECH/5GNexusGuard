@@ -146,7 +146,7 @@ static __always_inline int parse_ipv4_src(const struct __sk_buff *skb, __be32 *s
 	/* Load ethertype at offset 12 */
 	if (bpf_skb_load_bytes(skb, 12, &h_proto, sizeof(h_proto)) < 0)
 		return -1;
-	if (h_proto != bpf_htons(ETH_P_IP))
+	if (h_proto != ETH_P_IP)
 		return -1;
 
 	/* Load IP header at offset 14 (after ethhdr) */
@@ -170,7 +170,7 @@ static __always_inline int parse_ipv4_src(const struct __sk_buff *skb, __be32 *s
 static __always_inline void build_peer_key(__be32 src_ip, __u16 dst_port,
 					   struct peer_key *key)
 {
-	key->peer = (__force __u32)src_ip;
+	key->peer = src_ip;
 	key->resource = 0;
 	key->port = dst_port;
 	key->flags = 0;
@@ -183,7 +183,7 @@ static __always_inline void build_peer_key(__be32 src_ip, __u16 dst_port,
 /*  request payload (8Q: operation, generation, epoch, ...) and       */
 /*  validates epoch progression, deadlines, and gate state.          */
 /* ------------------------------------------------------------------ */
-SEC("tc/health_control")
+SEC("health_tc")
 int health_control(struct __sk_buff *skb)
 {
 	__u32 op = 0, epoch = 0;
@@ -191,61 +191,61 @@ int health_control(struct __sk_buff *skb)
 	__u32 tmp[8];
 	__u32 hdr_size = sizeof(struct ethhdr) + sizeof(struct iphdr);
 
-	/* Validate minimum packet length */
-	if (skb->len < hdr_size + sizeof(__u64) * 8)
-		return TC_ACT_SHOT;
+	/* Validate minimum packet length — short packets are not health packets, pass them */
+		if (skb->len < hdr_size + sizeof(__u64))
+			return TC_ACT_OK;
 
 	/* Extract source IP for authorization tracking */
 	__be32 src_ip = 0;
 	if (parse_ipv4_src(skb, &src_ip) != 0)
-		return TC_ACT_SHOT;
+		return TC_ACT_OK;  /* Not IPv4 — pass through */
 
 	/* Load operation field from packet */
 	if (bpf_skb_load_bytes(skb, hdr_size, &tmp[0], sizeof(__u32)) < 0)
-		goto drop;
+		goto pass_through;
 	op = tmp[0];
 
 	if (op == 0)
-		goto drop;
+		goto pass_through;
 
 	/* Load epoch (field 2, offset 4) */
 	if (bpf_skb_load_bytes(skb, hdr_size + 4, &tmp[1], sizeof(__u32)) < 0)
-		goto drop;
+		goto pass_through;
 
 	/* Load auth_deadline (field 4, offset 16) — 64-bit value */
 	if (bpf_skb_load_bytes(skb, hdr_size + 16, &auth_deadline, sizeof(__u64)) < 0)
-		goto drop;
+		goto pass_through;
 
 	if (auth_deadline == 0)
-		goto drop;
+		goto pass_through;
 
 	/* Load deadline (field 6, offset 24) — 64-bit value */
 	if (bpf_skb_load_bytes(skb, hdr_size + 24, &deadline_ns, sizeof(__u64)) < 0)
-		goto drop;
+		goto pass_through;
 
 	if (deadline_ns == 0)
-		goto drop;
+		goto pass_through;
 
 	/* Load checked field (field 5, offset 32) */
 	if (bpf_skb_load_bytes(skb, hdr_size + 32, &checked, sizeof(__u64)) < 0)
-		goto drop;
+		goto pass_through;
 
 	/* Validate deadline > auth_deadline for healthy state */
 	if (auth_deadline <= deadline_ns)
-		return TC_ACT_SHOT;
+		goto pass_through;
 
 	/* Check if state is closed */
 	__u32 key = 0;
 	struct health_state *state = bpf_map_lookup_elem(&health_map, &key);
 	if (!state)
-		return TC_ACT_SHOT;
+		goto pass_through;
 
 	if (state->closed)
-		return TC_ACT_SHOT;
+		goto pass_through;
 
 	/* Validate epoch progression */
 	if (state->epoch > epoch)
-		return TC_ACT_SHOT;
+		goto pass_through;
 
 	/* Update state */
 	state->checked = deadline_ns;
@@ -255,7 +255,7 @@ int health_control(struct __sk_buff *skb)
 
 	/* Also update the renewal_state for the source peer */
 	struct peer_key pkey = { 0 };
-	pkey.peer = (__force __u32)src_ip;
+	pkey.peer = src_ip;
 	pkey.resource = state->resource;
 	pkey.port = state->port;
 	pkey.flags = state->flags;
@@ -274,8 +274,8 @@ int health_control(struct __sk_buff *skb)
 
 	return TC_ACT_OK;
 
-drop:
-	return TC_ACT_SHOT;
+pass_through:
+	return TC_ACT_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -285,7 +285,7 @@ drop:
 /*  IPs.  Validates peer identity, resource, port, and flags         */
 /*  against the authorization map.                                    */
 /* ------------------------------------------------------------------ */
-SEC("tc/wg_ingress")
+SEC("wg_tc")
 int wg_ingress(struct __sk_buff *skb)
 {
 	struct iphdr ip;
@@ -301,7 +301,7 @@ int wg_ingress(struct __sk_buff *skb)
 	if (bpf_skb_load_bytes(skb, 12, &h_proto, sizeof(h_proto)) < 0)
 		return TC_ACT_SHOT;
 
-	if (h_proto != bpf_htons(ETH_P_IP))
+	if (h_proto != ETH_P_IP)
 		return TC_ACT_SHOT;
 
 	/* Load IP header */
@@ -326,52 +326,59 @@ int wg_ingress(struct __sk_buff *skb)
 
 	/* Check if this is a WireGuard packet (destination port 51820) */
 	if (bpf_ntohs(udp.dest) != WG_PORT)
-		return TC_ACT_SHOT;
+		return TC_ACT_OK;  /* Not WireGuard — pass to next filter */
 
 	/* Extract source IP for peer identity */
 	__be32 src_ip = 0;
 	if (parse_ipv4_src(skb, &src_ip) != 0)
 		return TC_ACT_SHOT;
 
-	/* Build peer_key: peer=src_ip, port=51820, resource/flags from auth */
+	/* Build peer_key: peer=src_ip only (state holds resource/port/flags) */
 	struct peer_key pkey = { 0 };
-	pkey.peer = (__force __u32)src_ip;
-	pkey.resource = 0;
-	pkey.port = bpf_ntohs(udp.dest);  /* 51820 */
-	pkey.flags = 0;
+	pkey.peer = src_ip;
 
-	/* Look up peer state in renewal_state by src IP */
-	struct locked_health *lh = bpf_map_lookup_elem(&renewal_state, &pkey);
-	if (!lh)
+	/* ENFORCEMENT: Check auth_map first — if no authorization exists, drop */
+	struct authorization *auth = bpf_map_lookup_elem(&auth_map, &pkey);
+	if (!auth)
 		return TC_ACT_SHOT;
 
 	__u64 now = bpf_ktime_get_boot_ns();
-	bpf_spin_lock(&lh->lock);
 
-	/* Validate state is not closed and epoch is initialized */
-	if (lh->state.closed || lh->state.epoch == 0)
-		goto unlock_drop;
+	/* Check auth deadline — if expired, drop */
+	if (auth->deadline_ns == 0 || auth->deadline_ns <= now)
+		return TC_ACT_SHOT;
 
-	/* Validate auth deadline and health deadline */
-	if (lh->state.auth_deadline == 0 || lh->state.auth_deadline <= now)
-		goto unlock_drop;
-	if (lh->state.deadline == 0 || lh->state.deadline <= now)
-		goto unlock_drop;
+	/* Also validate renewal_state if present (health check) */
+	struct locked_health *lh = bpf_map_lookup_elem(&renewal_state, &pkey);
+	if (lh) {
+		bpf_spin_lock(&lh->lock);
 
-	/* Validate resource, port, flags are set */
-	if (lh->state.resource == 0 || lh->state.port == 0 || lh->state.flags == 0)
-		goto unlock_drop;
+		/* Validate state is not closed and epoch is initialized */
+		if (lh->state.closed || lh->state.epoch == 0) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
 
-	/* Validate port matches WireGuard port */
-	if (lh->state.port != WG_PORT)
-		goto unlock_drop;
+		/* Validate auth deadline and health deadline */
+		if (lh->state.auth_deadline == 0 || lh->state.auth_deadline <= now) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
+		if (lh->state.deadline == 0 || lh->state.deadline <= now) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
 
-	bpf_spin_unlock(&lh->lock);
+		/* Validate resource, port, flags are set */
+		if (lh->state.resource == 0 || lh->state.port == 0 || lh->state.flags == 0) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
+
+		bpf_spin_unlock(&lh->lock);
+	}
+
 	return TC_ACT_OK;
-
-unlock_drop:
-	bpf_spin_unlock(&lh->lock);
-	return TC_ACT_SHOT;
 }
 
 /* ------------------------------------------------------------------ */
@@ -382,7 +389,7 @@ unlock_drop:
 /*  port/protocol against authorized values, and consults maps for   */
 /*  authorization state.                                              */
 /* ------------------------------------------------------------------ */
-SEC("tc/resource_ingress")
+SEC("resource_tc")
 int resource_ingress(struct __sk_buff *skb)
 {
 	struct iphdr ip;
@@ -399,7 +406,7 @@ int resource_ingress(struct __sk_buff *skb)
 	/* Load ethertype */
 	if (bpf_skb_load_bytes(skb, 12, &h_proto, sizeof(h_proto)) < 0)
 		return TC_ACT_SHOT;
-	if (h_proto != bpf_htons(ETH_P_IP))
+	if (h_proto != ETH_P_IP)
 		return TC_ACT_SHOT;
 
 	/* Load IP header */
@@ -453,39 +460,62 @@ int resource_ingress(struct __sk_buff *skb)
 		return TC_ACT_SHOT;
 	}
 
-	/* Check authorization state using source IP */
+	/* Check authorization state using source IP only */
 	struct peer_key pkey = { 0 };
-	pkey.peer = (__force __u32)src_ip;
-	pkey.resource = 0;
-	pkey.port = 0;
-	pkey.flags = 0;
+	pkey.peer = src_ip;
 
-	struct locked_health *lh =
-		bpf_map_lookup_elem(&renewal_state, &pkey);
-	if (!lh)
+	/* ENFORCEMENT: Check auth_map first — if no authorization exists, drop */
+	struct authorization *auth = bpf_map_lookup_elem(&auth_map, &pkey);
+	if (!auth)
 		return TC_ACT_SHOT;
 
+	/* Parse dest port based on protocol for port matching */
+	unsigned short dest_port = 0;
+	if (proto == IPPROTO_UDP) {
+		dest_port = udp.dest;
+	}
+
+	/* Check auth deadline — if expired, drop */
 	__u64 now = bpf_ktime_get_boot_ns();
-	bpf_spin_lock(&lh->lock);
+	if (auth->deadline_ns == 0 || auth->deadline_ns <= now)
+		return TC_ACT_SHOT;
 
-	if (lh->state.closed || lh->state.epoch == 0)
-		goto unlock_drop;
+	/* Also validate renewal_state if present (health check) */
+	struct locked_health *lh =
+		bpf_map_lookup_elem(&renewal_state, &pkey);
+	if (lh) {
+		bpf_spin_lock(&lh->lock);
 
-	if (lh->state.auth_deadline == 0 || lh->state.auth_deadline <= now)
-		goto unlock_drop;
-	if (lh->state.deadline == 0 || lh->state.deadline <= now)
-		goto unlock_drop;
+		if (lh->state.closed || lh->state.epoch == 0) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
 
-	/* Validate resource, port, flags are set */
-	if (lh->state.resource == 0 || lh->state.port == 0 || lh->state.flags == 0)
-		goto unlock_drop;
+		if (lh->state.auth_deadline == 0 || lh->state.auth_deadline <= now) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
+		if (lh->state.deadline == 0 || lh->state.deadline <= now) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
 
-	bpf_spin_unlock(&lh->lock);
+		/* Validate resource, port, flags are set */
+		if (lh->state.resource == 0 || lh->state.port == 0 || lh->state.flags == 0) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
+
+		/* Validate destination port matches authorized port */
+		if (dest_port != 0 && dest_port != bpf_htons(lh->state.port)) {
+			bpf_spin_unlock(&lh->lock);
+			return TC_ACT_SHOT;
+		}
+
+		bpf_spin_unlock(&lh->lock);
+	}
+
 	return TC_ACT_OK;
-
-unlock_drop:
-	bpf_spin_unlock(&lh->lock);
-	return TC_ACT_SHOT;
 }
 
 /* ---- license ---- */
